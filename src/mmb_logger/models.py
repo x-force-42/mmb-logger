@@ -154,6 +154,14 @@ class AndaimeVersionsResponse(BaseModel):
     items: list[str]
 
 
+class HealthDetailedResponse(BaseModel):
+    status: Literal["ok"]
+    db_path: str
+    ciclos_count: int
+    projetos_count: int
+    eventos_count: int
+
+
 class EventosListResponse(BaseModel):
     items: list[Evento]
 
