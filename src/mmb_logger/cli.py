@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import typer
@@ -10,15 +9,6 @@ import typer
 from mmb_logger import __version__
 from mmb_logger.db import init_db as _init_db
 from mmb_logger.db import resolve_db_path
-from mmb_logger.ingest.runner import (
-    ingest_once as _ingest_once,
-)
-from mmb_logger.ingest.runner import (
-    resolve_tooling_root,
-)
-from mmb_logger.ingest.runner import (
-    watch as _watch,
-)
 
 app = typer.Typer(
     add_completion=False,
@@ -74,34 +64,68 @@ def serve_cmd(
     )
 
 
-@app.command("ingest-once")
-def ingest_once_cmd(
-    db: str | None = typer.Option(None, "--db"),
-    tooling: str | None = typer.Option(None, "--tooling", help="Raiz do .tooling/."),
+@app.command("reconcile")
+def reconcile_cmd(
+    db: str | None = typer.Option(None, "--db", help="Caminho do SQLite."),
+    reset: bool = typer.Option(
+        False,
+        "--reset",
+        help=(
+            "DESTRUTIVO: apaga ciclos + epicos antes (eventos vão em CASCADE, "
+            "incluindo assertiveness_score e review_note dos ciclos atuais). "
+            "Use somente em cutover/rebuild controlado com snapshot prévio. "
+            "Operação normal é reconcile aditivo (sem --reset)."
+        ),
+    ),
+    owner: str = typer.Option("x-force-42", "--owner", help="GH owner/org."),
 ) -> None:
-    """Varredura única dos 3 fluxos. Idempotente."""
-    root = resolve_tooling_root(tooling)
-    if not Path(root).is_dir():
-        typer.secho(f"Erro: tooling_root inválido: {root}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=2)
-    counts = _ingest_once(db_path=db, tooling_root=root)
-    typer.echo("Ingestão concluída:")
-    for k, v in counts.items():
-        typer.echo(f"  {k}: {v}")
+    """Reconcile (fases 1-4).
 
+    Projeta o estado canônico do método em ciclos/épicos/eventos:
+    - Fase 1: GitHub issues + PRs → planejado / pr_aberto / completo / abortado-pós-GH.
+    - Fase 2: dispatch master→planner em inbox/ → iniciado, aborto pré-GH.
+    - Fase 3: audit eventos de journal/agents/inbox (sem transicionar estado);
+      epicos.intencao do master-briefing.md.
 
-@app.command("watch")
-def watch_cmd(
-    db: str | None = typer.Option(None, "--db"),
-    tooling: str | None = typer.Option(None, "--tooling"),
-) -> None:
-    """Sobe watcher contínuo (catch-up + observer). Ctrl+C desliga."""
-    root = resolve_tooling_root(tooling)
-    if not Path(root).is_dir():
-        typer.secho(f"Erro: tooling_root inválido: {root}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=2)
+    Preserva colunas humanas (assertiveness_score, review_note) via UPSERT
+    seletivo. Eventos audit usam UNIQUE source_key — idempotente.
+
+    Contrato em /MMB/.tooling/source-of-truth.md.
+    """
+    from mmb_logger.reconcile.reconcile import reconcile as _reconcile
+
+    if reset:
+        typer.secho(
+            "⚠  --reset é DESTRUTIVO:",
+            fg=typer.colors.RED,
+            bold=True,
+            err=True,
+        )
+        typer.secho(
+            "   - DELETE FROM ciclos + epicos antes de reconciliar.\n"
+            "   - eventos órfãos vão em CASCADE.\n"
+            "   - assertiveness_score e review_note dos ciclos atuais SERÃO PERDIDOS\n"
+            "     (cascateados junto com a row do ciclo).\n"
+            "   - projetos, processed_files e jsonl_cursor são preservados.\n"
+            "\n"
+            "   Use somente em cutover/rebuild controlado. Tenha um snapshot\n"
+            "   do DB antes (cp mmb-logger.db mmb-logger.pre-reset.sqlite).",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+
     try:
-        _watch(db_path=db, tooling_root=root)
-    except KeyboardInterrupt:  # pragma: no cover - sinal de usuário
-        typer.echo("\nDesligado.", err=True)
-        sys.exit(0)
+        result = _reconcile(db_path=db, owner=owner, reset=reset)
+    except RuntimeError as exc:
+        typer.secho(f"Erro: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    typer.echo(f"épicos upserted: {result.epicos_upserted}")
+    typer.echo(f"ciclos upserted: {result.ciclos_upserted}")
+    typer.echo(f"warnings: {len(result.warnings)}")
+    if result.warnings:
+        typer.echo("Resumo dos primeiros 10 warnings (todos foram pro stderr):")
+        for w in result.warnings[:10]:
+            typer.echo(f"  - {w}")
+
+

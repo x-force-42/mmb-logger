@@ -27,7 +27,10 @@ class Epico(BaseModel):
 
 
 CicloStatus = Literal["iniciado", "planejado", "pr_aberto", "completo", "abortado"]
-AbortOrigin = Literal["heartbeat", "manual", "self", "master"]
+AbortOrigin = Literal[
+    "heartbeat", "manual", "self", "master",
+    "worker-exit", "worker-timeout", "stale",
+]
 MergedToMain = Annotated[int | None, Field(ge=0, le=1)]
 AssertivenessScore = Annotated[int | None, Field(ge=1, le=5)]
 

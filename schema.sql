@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS ciclos (
   review_note TEXT,
   abort_at TEXT,
   abort_origin TEXT CHECK
-    (abort_origin IN ('heartbeat', 'manual', 'self', 'master') OR abort_origin IS NULL),
+    (abort_origin IN ('heartbeat', 'manual', 'self', 'master',
+                      'worker-exit', 'worker-timeout', 'stale')
+     OR abort_origin IS NULL),
   abort_reason TEXT,
   cost_usd REAL,
   tokens_input INTEGER,
@@ -56,12 +58,19 @@ CREATE TABLE IF NOT EXISTS eventos (
   kind TEXT NOT NULL,
   severity TEXT CHECK
     (severity IN ('info', 'warn', 'error', 'critical') OR severity IS NULL),
-  payload_json TEXT NOT NULL DEFAULT '{}'
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  -- v3 (fase 3): rastreio de origem do evento pra dedup idempotente
+  -- em runs repetidos do reconciler. NULL pra eventos legacy do regime
+  -- antigo (inference.py); NOT NULL pra eventos derivados pelo reconcile.
+  source_key TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_eventos_ciclo ON eventos(ciclo_id);
 CREATE INDEX IF NOT EXISTS idx_eventos_ts ON eventos(ts);
 CREATE INDEX IF NOT EXISTS idx_eventos_kind ON eventos(kind);
+-- NOTA: idx_eventos_source_key (UNIQUE parcial) é criado em db.py:init_db
+-- após o ALTER TABLE garantir a coluna em DBs migrados. Em DB novo, esta
+-- mesma migração roda também (idempotente via IF NOT EXISTS).
 
 CREATE TABLE IF NOT EXISTS projetos (
   id TEXT PRIMARY KEY,
