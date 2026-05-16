@@ -623,6 +623,32 @@ def list_projetos(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [_row_to_projeto(r) for r in rows]
 
 
+def _semver_key(v: str) -> tuple[int, ...]:
+    """Parse 'v0.7.0' -> (0,7,0), 'v0.1' -> (0,1), 'v0' -> (0,).
+
+    Tolerante a sufixos não-numéricos (ex.: 'v1.0.0-rc1' -> (1,0,0));
+    para a parte não-parseável, interrompe e mantém os componentes
+    inteiros já acumulados.
+    """
+    s = v.lstrip("v")
+    parts: list[int] = []
+    for p in s.split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            break
+    return tuple(parts) if parts else (0,)
+
+
+def list_andaime_versions(conn: sqlite3.Connection) -> list[str]:
+    """Versões distintas de `ciclos.andaime_version`, semver-desc, sem NULL."""
+    rows = conn.execute(
+        "SELECT DISTINCT andaime_version FROM ciclos WHERE andaime_version IS NOT NULL"
+    ).fetchall()
+    versions = [r[0] for r in rows]
+    return sorted(versions, key=_semver_key, reverse=True)
+
+
 # ---------------------------------------------------------------------------
 # Estado de ingestão
 # ---------------------------------------------------------------------------

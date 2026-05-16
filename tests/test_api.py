@@ -246,6 +246,27 @@ def test_ciclos_filter_andaime_version_combina_com_status(client: TestClient, db
     assert r.json()["total"] == 0
 
 
+def test_andaime_versions_route_200(client: TestClient, db_path):
+    _seed_andaime_versions(db_path)
+    r = client.get("/api/andaime-versions")
+    assert r.status_code == 200
+
+
+def test_andaime_versions_route_response_shape(client: TestClient, db_path):
+    _seed_andaime_versions(db_path)
+    r = client.get("/api/andaime-versions")
+    body = r.json()
+    assert set(body.keys()) == {"items"}
+    # Semver-desc: v0.7.0 > v0.6.0 > v0.5.0
+    assert body["items"] == ["v0.7.0", "v0.6.0", "v0.5.0"]
+
+
+def test_andaime_versions_route_empty_db(client: TestClient):
+    r = client.get("/api/andaime-versions")
+    assert r.status_code == 200
+    assert r.json() == {"items": []}
+
+
 def test_cors(client: TestClient):
     r = client.options(
         "/api/health",
