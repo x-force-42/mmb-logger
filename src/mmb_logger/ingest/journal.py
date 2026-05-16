@@ -26,6 +26,16 @@ class JournalEntry:
 
 
 def parse_line(line: str) -> JournalEntry | None:
+    """Parseia linha JSONL do `journal.jsonl`.
+
+    Aceita dois formatos conviventes:
+
+    - **log.sh** (audit warn/error/critical): `{ts, sev, ev, msg, epic, task, ...}`.
+    - **commd internal** (ops events sem severity): `{ts, event, dest, file, pid, ...}`.
+
+    Para commd entries, `ev` é populado de `event` e `sev` defaulta para
+    None (info-level). Audit downstream filtra por sev presente.
+    """
     line = line.strip()
     if not line:
         return None
@@ -35,12 +45,17 @@ def parse_line(line: str) -> JournalEntry | None:
         return None
     if not isinstance(d, dict):
         return None
-    if "ts" not in d or "sev" not in d or "ev" not in d:
+    if "ts" not in d:
         return None
+    # Aceita 'ev' (log.sh) ou 'event' (commd)
+    ev_val = d.get("ev") or d.get("event")
+    if not ev_val:
+        return None
+    sev_val = d.get("sev")  # None pra commd entries (info-level)
     return JournalEntry(
         ts=str(d["ts"]),
-        sev=str(d["sev"]),
-        ev=str(d["ev"]),
+        sev=str(sev_val) if sev_val else "info",
+        ev=str(ev_val),
         msg=str(d.get("msg", "")),
         epic=d.get("epic") or None,
         task=d.get("task") or None,

@@ -58,8 +58,9 @@ def get_conn(db_path: str | os.PathLike[str] | None = None) -> Iterator[sqlite3.
 def init_db(db_path: str | os.PathLike[str] | None = None) -> Path:
     """Aplica schema.sql. Idempotente (todos os CREATEs usam IF NOT EXISTS).
 
-    Também migra colunas adicionadas após o schema inicial via ALTER TABLE
-    defensivo (ignora erro se coluna já existir).
+    Também migra colunas e constraints adicionadas após o schema inicial:
+    - ALTER TABLE defensivo (ignora se coluna já existir).
+    - Recriação de `ciclos` se CHECK de `abort_origin` ainda for v1.
     """
     path = resolve_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,13 +71,104 @@ def init_db(db_path: str | os.PathLike[str] | None = None) -> Path:
         for stmt in (
             "ALTER TABLE epicos ADD COLUMN andaime_version TEXT",
             "ALTER TABLE ciclos ADD COLUMN andaime_version TEXT",
+            "ALTER TABLE eventos ADD COLUMN source_key TEXT",
         ):
             try:
                 conn.execute(stmt)
             except Exception:
                 pass  # coluna já existe — idempotente
+        # UNIQUE parcial em eventos.source_key (executescript de schema.sql
+        # cobre, mas explicitamos pra casos de DB pré-existente sem schema reload)
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_eventos_source_key "
+                "ON eventos(source_key) WHERE source_key IS NOT NULL"
+            )
+        except Exception:
+            pass
+        _migrate_ciclos_abort_origin_v2(conn)
         conn.commit()
     return path
+
+
+def _migrate_ciclos_abort_origin_v2(conn: sqlite3.Connection) -> None:
+    """Estende CHECK de `ciclos.abort_origin` pra incluir worker-exit/timeout/stale.
+
+    SQLite não suporta ALTER TABLE DROP/MODIFY CONSTRAINT, então o
+    procedimento é o "table-rebuild dance":
+      1. detectar via `sqlite_master.sql` se a CHECK antiga ainda vigora;
+      2. PRAGMA foreign_keys=OFF (preserva rows em `eventos` durante o drop);
+      3. CREATE TABLE ciclos_new com a nova CHECK;
+      4. INSERT INTO ciclos_new SELECT * FROM ciclos;
+      5. DROP TABLE ciclos; ALTER TABLE ciclos_new RENAME TO ciclos;
+      6. recriar índices (perdidos no DROP);
+      7. PRAGMA foreign_keys=ON + foreign_key_check pra sanidade.
+
+    Idempotente: se a CHECK nova já estiver no sqlite_master, no-op.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='ciclos'"
+    ).fetchone()
+    if row is None:
+        return  # tabela ainda não existe; schema.sql vai criar com a CHECK nova
+    existing_sql = row["sql"] or ""
+    if "'worker-exit'" in existing_sql:
+        return  # já migrada
+
+    # Lê o schema canônico do arquivo pra extrair o CREATE TABLE de ciclos.
+    full_schema = SCHEMA_PATH.read_text(encoding="utf-8")
+    new_ciclos_ddl = _extract_create_ciclos(full_schema)
+    if new_ciclos_ddl is None:
+        raise RuntimeError(
+            "migration: não consegui extrair CREATE TABLE ciclos de schema.sql"
+        )
+    new_ciclos_ddl = new_ciclos_ddl.replace(
+        "CREATE TABLE IF NOT EXISTS ciclos",
+        "CREATE TABLE ciclos_new",
+    )
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.executescript(new_ciclos_ddl)
+        conn.execute("INSERT INTO ciclos_new SELECT * FROM ciclos")
+        conn.execute("DROP TABLE ciclos")
+        conn.execute("ALTER TABLE ciclos_new RENAME TO ciclos")
+        # Recria índices (foram dropados junto com a tabela)
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS idx_ciclos_epico ON ciclos(epico_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ciclos_status ON ciclos(status)",
+            "CREATE INDEX IF NOT EXISTS idx_ciclos_project ON ciclos(project)",
+            "CREATE INDEX IF NOT EXISTS idx_ciclos_planner_invoked_at "
+            "ON ciclos(planner_invoked_at)",
+        ):
+            conn.execute(stmt)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+
+    # Sanidade pós-migração: nenhuma FK violada.
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError(
+            f"migration deixou {len(violations)} violações de FK: {violations}"
+        )
+
+
+def _extract_create_ciclos(schema_sql: str) -> str | None:
+    """Extrai o bloco `CREATE TABLE IF NOT EXISTS ciclos (...);` do schema.sql."""
+    marker = "CREATE TABLE IF NOT EXISTS ciclos"
+    start = schema_sql.find(marker)
+    if start == -1:
+        return None
+    # Acha o `);` que fecha o CREATE TABLE.
+    end = schema_sql.find(");", start)
+    if end == -1:
+        return None
+    return schema_sql[start : end + 2]
 
 
 # ---------------------------------------------------------------------------
