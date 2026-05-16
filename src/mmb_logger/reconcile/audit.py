@@ -167,7 +167,7 @@ def _write_inbox_events(
         ciclo_id = None
         if msg.thread:
             project_short = msg.to if msg.from_ == "master" else msg.from_
-            if project_short in ("core", "cockpit", "aquarium"):
+            if project_short in ("core", "cockpit", "aquarium", "logger"):
                 ciclo_id = _find_ciclo_by_epic_project(
                     conn, msg.thread, project_short
                 )

@@ -22,7 +22,7 @@ class InboxMessage:
     @property
     def project_slug(self) -> str | None:
         """Slug do projeto-alvo (core/cockpit/aquarium) ou None se for master."""
-        for repo in ("core", "cockpit", "aquarium"):
+        for repo in ("core", "cockpit", "aquarium", "logger"):
             if self.from_ == repo or self.to == repo:
                 return repo
         return None
