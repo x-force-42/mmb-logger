@@ -78,10 +78,14 @@ def _log_warn(text: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def apply_inbox_message(conn: sqlite3.Connection, msg: InboxMessage) -> None:
+def apply_inbox_message(
+    conn: sqlite3.Connection,
+    msg: InboxMessage,
+    andaime_version: str | None = None,
+) -> None:
     """Despacha mensagem da inbox para a regra apropriada (R1-R5, R9)."""
     if msg.from_ == "master" and msg.to in REPOS and msg.type == "briefing":
-        _rule_r1_briefing(conn, msg)
+        _rule_r1_briefing(conn, msg, andaime_version=andaime_version)
         return
 
     if msg.from_ in REPOS and msg.to == "master" and msg.type == "status":
@@ -104,7 +108,11 @@ def apply_inbox_message(conn: sqlite3.Connection, msg: InboxMessage) -> None:
     _rule_r9_generic_message(conn, msg)
 
 
-def _rule_r1_briefing(conn: sqlite3.Connection, msg: InboxMessage) -> None:
+def _rule_r1_briefing(
+    conn: sqlite3.Connection,
+    msg: InboxMessage,
+    andaime_version: str | None = None,
+) -> None:
     """R1: master → repo `briefing` cria épico (se faltar) + ciclo."""
     if not msg.thread:
         # Sem thread: não dá pra ancorar em épico. Vira evento solto.
@@ -126,6 +134,7 @@ def _rule_r1_briefing(conn: sqlite3.Connection, msg: InboxMessage) -> None:
         started_at=msg.created,
         intencao=intencao,
         status="aberto",
+        andaime_version=andaime_version,
     )
 
     cid = _ciclo_id(msg.thread, msg.to, msg.created)
@@ -139,6 +148,7 @@ def _rule_r1_briefing(conn: sqlite3.Connection, msg: InboxMessage) -> None:
         status="iniciado",
         instruction=instruction,
         briefing_md=msg.body,
+        andaime_version=andaime_version,
     )
     insert_evento(
         conn,

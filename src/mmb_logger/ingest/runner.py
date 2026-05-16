@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -31,6 +32,23 @@ from mmb_logger.ingest.inference import (
 from mmb_logger.ingest.journal import read_journal_after
 
 DEFAULT_TOOLING = Path("/home/eliezer/llab/MMB/.tooling")
+
+
+def resolve_andaime_version(tooling_root: Path) -> str | None:
+    """Lê versão do andaime via `git describe --tags --abbrev=0` no repo MMB."""
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--abbrev=0"],
+            cwd=str(tooling_root.parent),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+    except Exception:
+        pass
+    return None
 
 
 def resolve_tooling_root(explicit: str | os.PathLike[str] | None = None) -> Path:
@@ -60,7 +78,9 @@ def _seed_projetos(conn) -> None:
         )
 
 
-def ingest_inbox_files(conn, tooling_root: Path) -> tuple[int, int]:
+def ingest_inbox_files(
+    conn, tooling_root: Path, andaime_version: str | None = None
+) -> tuple[int, int]:
     """Varre todos os .md do inbox (inclusive lifecycle). Retorna (novos, total)."""
     files = iter_inbox_files(tooling_root)
     novos = 0
@@ -72,7 +92,7 @@ def ingest_inbox_files(conn, tooling_root: Path) -> tuple[int, int]:
         if msg is None:
             mark_file_processed(conn, path_str)
             continue
-        apply_inbox_message(conn, msg)
+        apply_inbox_message(conn, msg, andaime_version=andaime_version)
         mark_file_processed(conn, path_str)
         novos += 1
     return novos, len(files)
@@ -118,9 +138,10 @@ def ingest_once(
 ) -> dict[str, int]:
     """Varredura única, idempotente. Devolve contadores."""
     root = resolve_tooling_root(tooling_root)
+    version = resolve_andaime_version(root)
     with get_conn(db_path) as conn:
         _seed_projetos(conn)
-        novos_inbox, total_inbox = ingest_inbox_files(conn, root)
+        novos_inbox, total_inbox = ingest_inbox_files(conn, root, andaime_version=version)
         novos_journal = ingest_journal(conn, root)
         novos_agents = ingest_agents(conn, root)
     return {
