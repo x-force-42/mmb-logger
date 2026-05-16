@@ -1,0 +1,2 @@
+{"ts":"2026-05-10T12:01:00Z","sev":"warn","ev":"slow-spawn","msg":"spawn lento detectado","epic":"mmb-logger-destilacao","task":"M2"}
+{"ts":"2026-05-10T12:02:00Z","sev":"error","ev":"hook-failure","msg":"pre-commit falhou","epic":"mmb-logger-destilacao","task":"M2","resolves":null}

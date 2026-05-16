@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mmb-logger"
+version = "0.1.0"
+description = "Sistema de logs do andaime MMB — épicos, ciclos, eventos."
+requires-python = ">=3.12"
+authors = [{ name = "Eliezer Cardoso Alves", email = "eliezer.cardoso@venturus.org.br" }]
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.9",
+  "typer>=0.12",
+  "watchdog>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "httpx>=0.27",
+  "ruff>=0.6",
+]
+
+[project.scripts]
+mmb-logger = "mmb_logger.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mmb_logger"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
