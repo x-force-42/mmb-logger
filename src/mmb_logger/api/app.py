@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from mmb_logger import __version__
-from mmb_logger.api.routes import ciclos, epicos, eventos, metricas, projetos
+from mmb_logger.api.routes import andaime_versions, ciclos, epicos, eventos, metricas, projetos
 from mmb_logger.db import resolve_db_path
 
 
@@ -53,6 +53,7 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> FastAPI:
     app.include_router(eventos.router)
     app.include_router(projetos.router)
     app.include_router(metricas.router)
+    app.include_router(andaime_versions.router)
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

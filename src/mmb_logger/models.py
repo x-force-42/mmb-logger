@@ -150,6 +150,10 @@ class ProjetosListResponse(BaseModel):
     items: list[Projeto]
 
 
+class AndaimeVersionsResponse(BaseModel):
+    items: list[str]
+
+
 class EventosListResponse(BaseModel):
     items: list[Evento]
 

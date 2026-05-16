@@ -10,6 +10,7 @@ from mmb_logger.db import (
     get_epico,
     init_db,
     insert_evento,
+    list_andaime_versions,
     list_ciclos,
     list_epicos,
     list_eventos_by_ciclo,
@@ -177,6 +178,40 @@ def test_list_ciclos_filter_andaime_version_multi(conn: sqlite3.Connection):
     items, total = list_ciclos(conn, andaime_versions=["v0.5.0", "v0.7.0"])
     assert total == 2
     assert {c["id"] for c in items} == {"c1", "c3"}
+
+
+def test_list_andaime_versions_distinct_and_sorted(conn: sqlite3.Connection):
+    # Duplicatas e fora de ordem — esperamos distinct + semver desc.
+    _seed_epico_ciclo(conn, ep_id="ep1", ciclo_id="c1", andaime_version="v0.5.0")
+    _seed_epico_ciclo(conn, ep_id="ep2", ciclo_id="c2", andaime_version="v0.7.0")
+    _seed_epico_ciclo(conn, ep_id="ep3", ciclo_id="c3", andaime_version="v0.6.0")
+    _seed_epico_ciclo(conn, ep_id="ep4", ciclo_id="c4", andaime_version="v0.7.0")
+
+    assert list_andaime_versions(conn) == ["v0.7.0", "v0.6.0", "v0.5.0"]
+
+
+def test_list_andaime_versions_excludes_null(conn: sqlite3.Connection):
+    _seed_epico_ciclo(conn, ep_id="ep1", ciclo_id="c1", andaime_version="v0.5.0")
+    _seed_epico_ciclo(conn, ep_id="ep2", ciclo_id="c2", andaime_version=None)
+
+    assert list_andaime_versions(conn) == ["v0.5.0"]
+
+
+def test_list_andaime_versions_empty_db(conn: sqlite3.Connection):
+    assert list_andaime_versions(conn) == []
+
+
+def test_list_andaime_versions_handles_atypical_tags(conn: sqlite3.Connection):
+    # v0 (sem .x.y), v0.1 (sem patch) e v1.0.0-rc1 (sufixo não numérico)
+    # devem coexistir sem crash, ordenados em semver-desc por tuple
+    # de inteiros (prefixo parseável).
+    _seed_epico_ciclo(conn, ep_id="ep1", ciclo_id="c1", andaime_version="v0")
+    _seed_epico_ciclo(conn, ep_id="ep2", ciclo_id="c2", andaime_version="v0.1")
+    _seed_epico_ciclo(conn, ep_id="ep3", ciclo_id="c3", andaime_version="v1.0.0-rc1")
+    _seed_epico_ciclo(conn, ep_id="ep4", ciclo_id="c4", andaime_version="v0.10.0")
+
+    # Ordenação por tuple-de-int prefixo: (1,0,0) > (0,10,0) > (0,1) > (0,)
+    assert list_andaime_versions(conn) == ["v1.0.0-rc1", "v0.10.0", "v0.1", "v0"]
 
 
 def test_metrics_overview_vazio(conn: sqlite3.Connection):
