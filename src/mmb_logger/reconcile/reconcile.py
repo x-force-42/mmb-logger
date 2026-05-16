@@ -26,6 +26,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from mmb_logger.db import get_conn
@@ -45,7 +46,11 @@ from mmb_logger.reconcile.derive import (
 )
 from mmb_logger.reconcile.gh import REPOS, GhIssue, GhPr, fetch_issues, fetch_prs
 from mmb_logger.reconcile.inbox import Briefing, BriefingsLoaded, load_briefings
-from mmb_logger.reconcile.intents import load_intent_text
+from mmb_logger.reconcile.intents import (
+    load_briefing_text,
+    load_intent_text,
+    parse_closed_marker,
+)
 from mmb_logger.reconcile.transcripts import CostResult, compute_cost_for_ciclo
 
 OWNER_DEFAULT = "x-force-42"
@@ -326,6 +331,11 @@ def reconcile(
         if tooling_path is not None:
             _enrich_epicos_intencao(conn, tooling_path)
 
+        # 5. Fechamento explícito de épicos a partir do marcador ✅
+        #    no master-briefing.md — fase 3.
+        if tooling_path is not None:
+            _enrich_epicos_closure(conn, tooling_path)
+
     return result
 
 
@@ -345,6 +355,41 @@ def _enrich_epicos_intencao(conn: sqlite3.Connection, tooling_root) -> None:
                 "UPDATE epicos SET intencao = ? WHERE id = ? AND intencao = ?",
                 (intent, row["id"], row["id"]),
             )
+
+
+def _enrich_epicos_closure(conn: sqlite3.Connection, tooling_root: Path) -> None:
+    """Projeta fechamento explícito do briefing pra epicos.status/closed_at.
+
+    Regra (source-of-truth.md §epicos.status):
+      ✅ presente + aberto                  → fecha (now)
+      ✅ presente + fechado com closed_at   → no-op (preserva closed_at original)
+      ✅ ausente   + fechado                → reabre (status=aberto, closed_at=NULL)
+      ✅ ausente   + aberto                 → no-op
+      briefing ausente                      → tratado como ✅ ausente
+
+    Campos humanos não são tocados.
+    """
+    rows = conn.execute(
+        "SELECT id, slug, status, closed_at FROM epicos"
+    ).fetchall()
+    now = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    for row in rows:
+        text = load_briefing_text(tooling_root, row["slug"])
+        is_closed_marker = bool(text) and parse_closed_marker(text)
+
+        if is_closed_marker:
+            if row["status"] != "fechado" or row["closed_at"] is None:
+                conn.execute(
+                    "UPDATE epicos SET status='fechado', closed_at=? WHERE id=?",
+                    (now, row["id"]),
+                )
+        else:
+            if row["status"] == "fechado":
+                conn.execute(
+                    "UPDATE epicos SET status='aberto', closed_at=NULL WHERE id=?",
+                    (row["id"],),
+                )
 
 
 def _reset_derived_state(conn: sqlite3.Connection) -> None:
@@ -631,7 +676,8 @@ def _upsert_epico_min(
     """INSERT épico se ausente; UPDATE started_at se ts mais antigo aparecer.
 
     `intencao` fica como o próprio slug — placeholder até fase 3 ler
-    master-briefing.md. Status sempre `aberto` (fechamento explícito é fase 3+).
+    master-briefing.md. Status inicializado como 'aberto'. Fechamento é
+    projetado em _enrich_epicos_closure a partir do marcador ✅ no master-briefing.md.
     Retorna True se inseriu pela primeira vez.
     """
     existing = conn.execute(

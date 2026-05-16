@@ -11,11 +11,61 @@ datas diferentes — re-dispatches), escolhe o mais recente lexicograficamente
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 # Tamanho máximo de intenção. Cockpit mostra a primeira linha; passar muito
 # disso seria poluição. Truncamento conservador.
 _MAX_INTENT_CHARS = 500
+
+# Linha canônica de fechamento: 'Status: ✅' com variações de formatação markdown.
+_CLOSED_RE = re.compile(r"^\s*[-*]?\s*Status:\s*.*✅", re.MULTILINE)
+
+
+def _find_briefing_path(tooling_root: Path, epic_slug: str) -> Path | None:
+    """Retorna o path do master-briefing.md mais recente pra `epic_slug`, ou None."""
+    intents_dir = Path(tooling_root) / "intents"
+    if not intents_dir.is_dir():
+        return None
+
+    candidates = [
+        d for d in intents_dir.iterdir()
+        if d.is_dir() and d.name.endswith(f"-{epic_slug}")
+    ]
+    if not candidates:
+        return None
+
+    chosen = sorted(candidates)[-1]
+    briefing_path = chosen / "master-briefing.md"
+    return briefing_path if briefing_path.is_file() else None
+
+
+def load_briefing_text(tooling_root: Path, epic_slug: str) -> str | None:
+    """Retorna o conteúdo bruto do master-briefing.md mais recente pra `epic_slug`.
+
+    Retorna None se não encontrar dir, não encontrar master-briefing.md, ou
+    arquivo vazio.
+    """
+    path = _find_briefing_path(tooling_root, epic_slug)
+    if path is None:
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return text or None
+
+
+def parse_closed_marker(text: str) -> bool:
+    """True se o briefing tem linha 'Status: ✅' (primeira que case).
+
+    Tolera variações de formatação markdown ('- Status: ✅ fechado',
+    '* Status: ✅', 'Status: ✅ fechado em 2026-...'). Outros emoji
+    de status (🎯 ativo, ⏳ em execução, ❌ abortado) não fecham.
+
+    Sem linha 'Status:' → False (briefing em execução ou template).
+    """
+    return bool(_CLOSED_RE.search(text))
 
 
 def load_intent_text(tooling_root: Path, epic_slug: str) -> str | None:
@@ -28,21 +78,8 @@ def load_intent_text(tooling_root: Path, epic_slug: str) -> str | None:
     Retorna None se não encontrar dir, não encontrar master-briefing.md, ou
     arquivo vazio.
     """
-    intents_dir = Path(tooling_root) / "intents"
-    if not intents_dir.is_dir():
-        return None
-
-    candidates = [
-        d for d in intents_dir.iterdir()
-        if d.is_dir() and d.name.endswith(f"-{epic_slug}")
-    ]
-    if not candidates:
-        return None
-
-    # Mais recente — prefixo de data ordena bem
-    chosen = sorted(candidates)[-1]
-    briefing_path = chosen / "master-briefing.md"
-    if not briefing_path.is_file():
+    briefing_path = _find_briefing_path(tooling_root, epic_slug)
+    if briefing_path is None:
         return None
 
     try:
