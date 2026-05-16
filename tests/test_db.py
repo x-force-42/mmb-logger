@@ -10,6 +10,8 @@ from mmb_logger.db import (
     get_epico,
     init_db,
     insert_evento,
+    list_ciclos,
+    list_epicos,
     list_eventos_by_ciclo,
     list_projetos,
     metrics_overview,
@@ -109,6 +111,72 @@ def test_projetos(conn: sqlite3.Connection):
     pj = list_projetos(conn)
     assert len(pj) == 1
     assert pj[0]["slug"] == "mmb-core"
+
+
+def _seed_epico_ciclo(
+    conn: sqlite3.Connection,
+    *,
+    ep_id: str,
+    ciclo_id: str,
+    andaime_version: str | None,
+) -> None:
+    upsert_epico(
+        conn,
+        id=ep_id,
+        slug=ep_id,
+        started_at=f"2026-01-01T00:00:{int(ep_id[-1]):02d}Z",
+        intencao="x",
+        andaime_version=andaime_version,
+    )
+    upsert_ciclo(
+        conn,
+        id=ciclo_id,
+        epico_id=ep_id,
+        project="mmb-cockpit",
+        planner_invoked_at=f"2026-01-01T00:00:{int(ciclo_id[-1]):02d}Z",
+        status="iniciado",
+        instruction="i",
+        andaime_version=andaime_version,
+    )
+
+
+def test_list_epicos_filter_andaime_version_single(conn: sqlite3.Connection):
+    _seed_epico_ciclo(conn, ep_id="ep1", ciclo_id="c1", andaime_version="v0.5.0")
+    _seed_epico_ciclo(conn, ep_id="ep2", ciclo_id="c2", andaime_version="v0.6.0")
+    _seed_epico_ciclo(conn, ep_id="ep3", ciclo_id="c3", andaime_version=None)
+
+    items, total = list_epicos(conn, andaime_versions=["v0.6.0"])
+    assert total == 1
+    assert {ep["id"] for ep in items} == {"ep2"}
+
+
+def test_list_epicos_filter_andaime_version_multi(conn: sqlite3.Connection):
+    _seed_epico_ciclo(conn, ep_id="ep1", ciclo_id="c1", andaime_version="v0.5.0")
+    _seed_epico_ciclo(conn, ep_id="ep2", ciclo_id="c2", andaime_version="v0.6.0")
+    _seed_epico_ciclo(conn, ep_id="ep3", ciclo_id="c3", andaime_version="v0.7.0")
+
+    items, total = list_epicos(conn, andaime_versions=["v0.5.0", "v0.6.0"])
+    assert total == 2
+    assert {ep["id"] for ep in items} == {"ep1", "ep2"}
+
+
+def test_list_ciclos_filter_andaime_version_single(conn: sqlite3.Connection):
+    _seed_epico_ciclo(conn, ep_id="ep1", ciclo_id="c1", andaime_version="v0.5.0")
+    _seed_epico_ciclo(conn, ep_id="ep2", ciclo_id="c2", andaime_version="v0.6.0")
+
+    items, total = list_ciclos(conn, andaime_versions=["v0.6.0"])
+    assert total == 1
+    assert {c["id"] for c in items} == {"c2"}
+
+
+def test_list_ciclos_filter_andaime_version_multi(conn: sqlite3.Connection):
+    _seed_epico_ciclo(conn, ep_id="ep1", ciclo_id="c1", andaime_version="v0.5.0")
+    _seed_epico_ciclo(conn, ep_id="ep2", ciclo_id="c2", andaime_version="v0.6.0")
+    _seed_epico_ciclo(conn, ep_id="ep3", ciclo_id="c3", andaime_version="v0.7.0")
+
+    items, total = list_ciclos(conn, andaime_versions=["v0.5.0", "v0.7.0"])
+    assert total == 2
+    assert {c["id"] for c in items} == {"c1", "c3"}
 
 
 def test_metrics_overview_vazio(conn: sqlite3.Connection):
