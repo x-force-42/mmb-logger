@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from mmb_logger.db import get_conn, get_epico, list_ciclos_by_epico, list_epicos
@@ -16,6 +18,7 @@ def list_epicos_route(
     status: str | None = Query(default=None, pattern="^(aberto|fechado)$"),
     date_from: str | None = Query(default=None, alias="from"),
     date_to: str | None = Query(default=None, alias="to"),
+    andaime_version: Annotated[list[str] | None, Query()] = None,
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> EpicosListResponse:
@@ -26,6 +29,7 @@ def list_epicos_route(
             status=status,
             date_from=date_from,
             date_to=date_to,
+            andaime_versions=andaime_version,
             limit=limit,
             offset=offset,
         )

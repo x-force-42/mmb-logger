@@ -139,6 +139,113 @@ def test_metricas_overview(client: TestClient, db_path):
     assert body["ciclos_total"] == 1
 
 
+def _seed_andaime_versions(db_path):
+    """Seed 3 épicos/ciclos com andaime_version distintos."""
+    with get_conn(db_path) as conn:
+        for idx, version in enumerate(["v0.5.0", "v0.6.0", "v0.7.0"], start=1):
+            upsert_epico(
+                conn,
+                id=f"ep{idx}",
+                slug=f"ep{idx}",
+                started_at=f"2026-05-10T10:00:0{idx}Z",
+                intencao="x",
+                andaime_version=version,
+            )
+            upsert_ciclo(
+                conn,
+                id=f"c{idx}",
+                epico_id=f"ep{idx}",
+                project="mmb-cockpit",
+                planner_invoked_at=f"2026-05-10T10:00:0{idx}Z",
+                status="completo" if idx == 2 else "iniciado",
+                instruction="i",
+                andaime_version=version,
+            )
+
+
+def test_epicos_filter_andaime_version_single(client: TestClient, db_path):
+    _seed_andaime_versions(db_path)
+    r = client.get("/api/epicos?andaime_version=v0.6.0")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert {ep["id"] for ep in body["items"]} == {"ep2"}
+
+
+def test_epicos_filter_andaime_version_multi(client: TestClient, db_path):
+    _seed_andaime_versions(db_path)
+    r = client.get("/api/epicos?andaime_version=v0.5.0&andaime_version=v0.6.0")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert {ep["id"] for ep in body["items"]} == {"ep1", "ep2"}
+
+
+def test_epicos_filter_andaime_version_absent(client: TestClient, db_path):
+    _seed_andaime_versions(db_path)
+    r = client.get("/api/epicos")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 3
+
+
+def test_ciclos_filter_andaime_version_single(client: TestClient, db_path):
+    _seed_andaime_versions(db_path)
+    r = client.get("/api/ciclos?andaime_version=v0.7.0")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert {c["id"] for c in body["items"]} == {"c3"}
+
+
+def test_ciclos_filter_andaime_version_multi(client: TestClient, db_path):
+    _seed_andaime_versions(db_path)
+    r = client.get("/api/ciclos?andaime_version=v0.5.0&andaime_version=v0.7.0")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert {c["id"] for c in body["items"]} == {"c1", "c3"}
+
+
+def test_ciclos_filter_andaime_version_absent(client: TestClient, db_path):
+    _seed_andaime_versions(db_path)
+    r = client.get("/api/ciclos")
+    assert r.status_code == 200
+    assert r.json()["total"] == 3
+
+
+def test_epicos_filter_andaime_version_combina_com_status(client: TestClient, db_path):
+    """Filtro andaime_version combina com outros filtros via AND."""
+    _seed_andaime_versions(db_path)
+    # ep2 está aberto (default) e tem v0.6.0; pedimos status=aberto + v0.6.0.
+    r = client.get("/api/epicos?status=aberto&andaime_version=v0.6.0")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == "ep2"
+
+    # Filtro com versão que existe mas combinada com status que nenhum tem.
+    r = client.get("/api/epicos?status=fechado&andaime_version=v0.6.0")
+    assert r.status_code == 200
+    assert r.json()["total"] == 0
+
+
+def test_ciclos_filter_andaime_version_combina_com_status(client: TestClient, db_path):
+    """AND entre andaime_version e status no /api/ciclos."""
+    _seed_andaime_versions(db_path)
+    # Só c2 tem status=completo; pedimos v0.6.0 (c2) + completo.
+    r = client.get("/api/ciclos?status=completo&andaime_version=v0.6.0")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == "c2"
+
+    # Mesmo versão v0.5.0 (c1, iniciado) + completo → vazio.
+    r = client.get("/api/ciclos?status=completo&andaime_version=v0.5.0")
+    assert r.status_code == 200
+    assert r.json()["total"] == 0
+
+
 def test_cors(client: TestClient):
     r = client.options(
         "/api/health",

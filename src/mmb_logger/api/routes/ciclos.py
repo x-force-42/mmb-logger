@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from mmb_logger.db import get_ciclo, get_conn, list_ciclos, patch_ciclo
@@ -21,6 +23,7 @@ def list_ciclos_route(
     abort_origin: str | None = Query(default=None, pattern="^(heartbeat|manual|self|master)$"),
     date_from: str | None = Query(default=None, alias="from"),
     date_to: str | None = Query(default=None, alias="to"),
+    andaime_version: Annotated[list[str] | None, Query()] = None,
     order_by: str = Query(default="planner_invoked_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     limit: int = Query(default=50, ge=1, le=500),
@@ -36,6 +39,7 @@ def list_ciclos_route(
             abort_origin=abort_origin,
             date_from=date_from,
             date_to=date_to,
+            andaime_versions=andaime_version,
             order_by=order_by,
             order_dir=order_dir,
             limit=limit,

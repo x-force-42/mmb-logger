@@ -313,6 +313,7 @@ def list_epicos(
     status: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    andaime_versions: list[str] | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -327,6 +328,10 @@ def list_epicos(
     if date_to:
         where.append("started_at <= ?")
         params.append(date_to)
+    if andaime_versions:
+        placeholders = ",".join("?" for _ in andaime_versions)
+        where.append(f"andaime_version IN ({placeholders})")
+        params.extend(andaime_versions)
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     total = conn.execute(f"SELECT COUNT(*) AS n FROM epicos {clause}", params).fetchone()["n"]
     rows = conn.execute(
@@ -454,6 +459,7 @@ def list_ciclos(
     abort_origin: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    andaime_versions: list[str] | None = None,
     order_by: str = "planner_invoked_at",
     order_dir: str = "desc",
     limit: int = 50,
@@ -479,6 +485,10 @@ def list_ciclos(
     if date_to:
         where.append("planner_invoked_at <= ?")
         params.append(date_to)
+    if andaime_versions:
+        placeholders = ",".join("?" for _ in andaime_versions)
+        where.append(f"andaime_version IN ({placeholders})")
+        params.extend(andaime_versions)
 
     allowed_order = {"planner_invoked_at", "cost_usd"}
     if order_by not in allowed_order:
