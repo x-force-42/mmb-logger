@@ -56,12 +56,25 @@ def get_conn(db_path: str | os.PathLike[str] | None = None) -> Iterator[sqlite3.
 
 
 def init_db(db_path: str | os.PathLike[str] | None = None) -> Path:
-    """Aplica schema.sql. Idempotente (todos os CREATEs usam IF NOT EXISTS)."""
+    """Aplica schema.sql. Idempotente (todos os CREATEs usam IF NOT EXISTS).
+
+    Também migra colunas adicionadas após o schema inicial via ALTER TABLE
+    defensivo (ignora erro se coluna já existir).
+    """
     path = resolve_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     sql = SCHEMA_PATH.read_text(encoding="utf-8")
     with _connect(path) as conn:
         conn.executescript(sql)
+        # Migração defensiva: colunas adicionadas após v1 do schema.
+        for stmt in (
+            "ALTER TABLE epicos ADD COLUMN andaime_version TEXT",
+            "ALTER TABLE ciclos ADD COLUMN andaime_version TEXT",
+        ):
+            try:
+                conn.execute(stmt)
+            except Exception:
+                pass  # coluna já existe — idempotente
         conn.commit()
     return path
 
@@ -80,6 +93,7 @@ def _row_to_epico(row: sqlite3.Row, stats: dict[str, int] | None = None) -> dict
         "intencao": row["intencao"],
         "status": row["status"],
         "closed_at": row["closed_at"],
+        "andaime_version": row["andaime_version"],
         "ciclos_total": stats.get("total", 0),
         "ciclos_completos": stats.get("completos", 0),
         "ciclos_abortados": stats.get("abortados", 0),
@@ -103,6 +117,7 @@ def _row_to_ciclo(row: sqlite3.Row) -> dict[str, Any]:
         "cost_usd": row["cost_usd"],
         "abort_origin": row["abort_origin"],
         "abort_reason": row["abort_reason"],
+        "andaime_version": row["andaime_version"],
     }
 
 
@@ -162,14 +177,15 @@ def upsert_epico(
     started_at: str,
     intencao: str,
     status: str = "aberto",
+    andaime_version: str | None = None,
 ) -> None:
     conn.execute(
         """
-        INSERT INTO epicos (id, slug, started_at, intencao, status)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO epicos (id, slug, started_at, intencao, status, andaime_version)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO NOTHING
         """,
-        (id, slug, started_at, intencao, status),
+        (id, slug, started_at, intencao, status, andaime_version),
     )
 
 
@@ -249,16 +265,19 @@ def upsert_ciclo(
     status: str,
     instruction: str,
     briefing_md: str | None = None,
+    andaime_version: str | None = None,
 ) -> bool:
     """Insere ciclo se ainda não existe. Retorna True se inseriu."""
     cur = conn.execute(
         """
         INSERT INTO ciclos
-          (id, epico_id, project, planner_invoked_at, status, instruction, briefing_md)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+          (id, epico_id, project, planner_invoked_at, status, instruction, briefing_md,
+           andaime_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO NOTHING
         """,
-        (id, epico_id, project, planner_invoked_at, status, instruction, briefing_md),
+        (id, epico_id, project, planner_invoked_at, status, instruction, briefing_md,
+         andaime_version),
     )
     return cur.rowcount > 0
 

@@ -20,6 +20,7 @@ class Epico(BaseModel):
     intencao: str
     status: EpicoStatus
     closed_at: str | None = None
+    andaime_version: str | None = None
     ciclos_total: int = 0
     ciclos_completos: int = 0
     ciclos_abortados: int = 0
@@ -47,6 +48,7 @@ class Ciclo(BaseModel):
     cost_usd: float | None = None
     abort_origin: AbortOrigin | None = None
     abort_reason: str | None = None
+    andaime_version: str | None = None
 
 
 class CicloDetail(Ciclo):

@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS epicos (
   started_at TEXT NOT NULL,
   intencao TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('aberto', 'fechado')),
-  closed_at TEXT
+  closed_at TEXT,
+  andaime_version TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_epicos_status ON epicos(status);
@@ -39,7 +40,8 @@ CREATE TABLE IF NOT EXISTS ciclos (
   tokens_output INTEGER,
   diff_added INTEGER,
   diff_deleted INTEGER,
-  diff_files INTEGER
+  diff_files INTEGER,
+  andaime_version TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_ciclos_epico ON ciclos(epico_id);
