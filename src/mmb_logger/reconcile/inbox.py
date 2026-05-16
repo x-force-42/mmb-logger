@@ -17,7 +17,7 @@ from pathlib import Path
 from mmb_logger.ingest.inbox import parse_inbox_file
 
 # Project shorts válidos como destinatários de briefing.
-REPOS_SHORT = ("core", "cockpit", "aquarium")
+REPOS_SHORT = ("core", "cockpit", "aquarium", "logger")
 
 
 @dataclass(frozen=True)

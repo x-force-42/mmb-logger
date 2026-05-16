@@ -90,6 +90,6 @@ def decode_agent_id(agent_id: str) -> tuple[str | None, str | None]:
     if "-" not in agent_id:
         return (None, None)
     prefix, _, suffix = agent_id.partition("-")
-    if prefix not in ("core", "cockpit", "aquarium"):
+    if prefix not in ("core", "cockpit", "aquarium", "logger"):
         return (None, None)
     return (prefix, suffix or None)
