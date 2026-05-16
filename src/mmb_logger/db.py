@@ -623,6 +623,23 @@ def list_projetos(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [_row_to_projeto(r) for r in rows]
 
 
+# ---------------------------------------------------------------------------
+# Counts (health/detailed)
+# ---------------------------------------------------------------------------
+
+
+def count_ciclos(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("SELECT COUNT(*) FROM ciclos").fetchone()[0])
+
+
+def count_projetos(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("SELECT COUNT(*) FROM projetos").fetchone()[0])
+
+
+def count_eventos(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("SELECT COUNT(*) FROM eventos").fetchone()[0])
+
+
 def _semver_key(v: str) -> tuple[int, ...]:
     """Parse 'v0.7.0' -> (0,7,0), 'v0.1' -> (0,1), 'v0' -> (0,).
 

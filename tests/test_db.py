@@ -6,6 +6,9 @@ import sqlite3
 from pathlib import Path
 
 from mmb_logger.db import (
+    count_ciclos,
+    count_eventos,
+    count_projetos,
     get_ciclo,
     get_epico,
     init_db,
@@ -212,6 +215,78 @@ def test_list_andaime_versions_handles_atypical_tags(conn: sqlite3.Connection):
 
     # Ordenação por tuple-de-int prefixo: (1,0,0) > (0,10,0) > (0,1) > (0,)
     assert list_andaime_versions(conn) == ["v1.0.0-rc1", "v0.10.0", "v0.1", "v0"]
+
+
+def test_count_ciclos_empty(conn: sqlite3.Connection):
+    assert count_ciclos(conn) == 0
+
+
+def test_count_ciclos_populated(conn: sqlite3.Connection):
+    upsert_epico(conn, id="ep1", slug="ep1", started_at="2026-05-10T10:00:00Z", intencao="x")
+    upsert_ciclo(
+        conn,
+        id="c1",
+        epico_id="ep1",
+        project="mmb-cockpit",
+        planner_invoked_at="2026-05-10T10:00:00Z",
+        status="iniciado",
+        instruction="i",
+    )
+    upsert_ciclo(
+        conn,
+        id="c2",
+        epico_id="ep1",
+        project="mmb-core",
+        planner_invoked_at="2026-05-10T10:00:00Z",
+        status="iniciado",
+        instruction="i",
+    )
+    assert count_ciclos(conn) == 2
+
+
+def test_count_projetos_empty(conn: sqlite3.Connection):
+    assert count_projetos(conn) == 0
+
+
+def test_count_projetos_populated(conn: sqlite3.Connection):
+    upsert_projeto(
+        conn,
+        id="mmb-cockpit",
+        slug="mmb-cockpit",
+        name="MMB Cockpit",
+        path="/x",
+        created_at="2026-05-10T10:00:00Z",
+    )
+    upsert_projeto(
+        conn,
+        id="mmb-core",
+        slug="mmb-core",
+        name="MMB Core",
+        path="/y",
+        created_at="2026-05-10T10:00:00Z",
+    )
+    assert count_projetos(conn) == 2
+
+
+def test_count_eventos_empty(conn: sqlite3.Connection):
+    assert count_eventos(conn) == 0
+
+
+def test_count_eventos_populated(conn: sqlite3.Connection):
+    upsert_epico(conn, id="ep1", slug="ep1", started_at="2026-05-10T10:00:00Z", intencao="x")
+    upsert_ciclo(
+        conn,
+        id="c1",
+        epico_id="ep1",
+        project="mmb-cockpit",
+        planner_invoked_at="2026-05-10T10:00:00Z",
+        status="iniciado",
+        instruction="i",
+    )
+    insert_evento(conn, ciclo_id="c1", ts="2026-05-10T10:00:00Z", kind="msg_send")
+    insert_evento(conn, ciclo_id="c1", ts="2026-05-10T10:00:01Z", kind="msg_send")
+    insert_evento(conn, ciclo_id="c1", ts="2026-05-10T10:00:02Z", kind="msg_send")
+    assert count_eventos(conn) == 3
 
 
 def test_metrics_overview_vazio(conn: sqlite3.Connection):

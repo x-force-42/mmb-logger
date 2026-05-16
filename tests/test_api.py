@@ -50,6 +50,46 @@ def test_health(client: TestClient):
     assert r.json() == {"status": "ok"}
 
 
+def test_health_route_unchanged(client: TestClient, db_path):
+    # Garante que /api/health não foi quebrado pela introdução de
+    # /api/health/detailed — shape antigo precisa permanecer exato.
+    _seed(db_path)
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
+def test_health_detailed_route_200(client: TestClient):
+    r = client.get("/api/health/detailed")
+    assert r.status_code == 200
+
+
+def test_health_detailed_route_shape(client: TestClient, db_path):
+    r = client.get("/api/health/detailed")
+    body = r.json()
+    assert set(body.keys()) == {
+        "status",
+        "db_path",
+        "ciclos_count",
+        "projetos_count",
+        "eventos_count",
+    }
+    assert body["status"] == "ok"
+    assert isinstance(body["db_path"], str)
+    assert isinstance(body["ciclos_count"], int)
+    assert isinstance(body["projetos_count"], int)
+    assert isinstance(body["eventos_count"], int)
+    assert body["db_path"] == str(db_path)
+
+
+def test_health_detailed_counts_correct(client: TestClient, db_path):
+    _seed(db_path)
+    body = client.get("/api/health/detailed").json()
+    assert body["ciclos_count"] == 1
+    assert body["projetos_count"] == 1
+    assert body["eventos_count"] == 1
+
+
 def test_list_epicos_vazio(client: TestClient):
     r = client.get("/api/epicos")
     assert r.status_code == 200
