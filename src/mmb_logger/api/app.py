@@ -27,9 +27,22 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> FastAPI:
 
     app.state.db_path = Path(resolved)
 
+    # CORS: defaults cobrem Vite dev (5173) E preview (4173) em ambos
+    # localhost e 127.0.0.1. Override via env MMB_LOGGER_CORS_ORIGINS
+    # (comma-separated) quando o cockpit estiver em outra origin.
+    cors_env = os.environ.get("MMB_LOGGER_CORS_ORIGINS")
+    if cors_env:
+        cors_origins = [o.strip() for o in cors_env.split(",") if o.strip()]
+    else:
+        cors_origins = [
+            "http://localhost:4173",   # vite preview (production build)
+            "http://127.0.0.1:4173",
+            "http://localhost:5173",   # vite dev (HMR)
+            "http://127.0.0.1:5173",
+        ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=cors_origins,
         allow_methods=["GET", "PATCH", "OPTIONS"],
         allow_headers=["*"],
         allow_credentials=False,
