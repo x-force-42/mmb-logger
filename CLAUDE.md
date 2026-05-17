@@ -117,6 +117,27 @@ Constante `DERIVED_COLS` em `reconcile/reconcile.py` é a única lista
 permitida no UPSERT. Adicionar coluna nova ao domínio derivado exige
 editar essa constante + teste de preservação humana.
 
+## Convenção de fuso (v0.9.0+)
+
+**Storage:** todos os timestamps em colunas do DB são **UTC** (ISO 8601
+com `Z`). Não muda.
+
+**Agregação diária em `/api/metricas/overview`:** as métricas
+`custo_por_dia` e `ciclos_por_dia` usam **dia operacional local do MMB,
+atualmente BRT/UTC-3**, derivado via SQLite modifier `datetime(ts, '-3
+hours')`. Eventos rodados entre 21:00–23:59 BRT continuam contabilizados
+no dia BRT correto (e não no dia UTC seguinte como antes).
+
+Esta convenção **não se generaliza** automaticamente pra outros campos
+de data do sistema — só vale pro bucketing diário da view de métricas.
+Outros endpoints/queries que vierem a bucketar por dia devem decidir
+explicitamente entre UTC e local; sem decisão, default é UTC (estado
+nativo do storage).
+
+Hardcode `-3 hours` é decisão MVP/monolocal. Promover pra env var
+(`MMB_LOGGER_TZ_OFFSET`) se: (a) Brasil voltar a usar DST, ou (b) a
+operação ficar multi-timezone.
+
 ## Quando NÃO seguir o profile estrito
 
 - Rick pediu hotfix direto (1 linha) — modo dev tradicional.

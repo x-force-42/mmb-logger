@@ -768,9 +768,15 @@ def metrics_overview(conn: sqlite3.Connection, days: int = 30) -> dict[str, Any]
     taxa_abort = (abort_count / ciclos_total) if ciclos_total else 0.0
     taxa_merged = (merged_count / ciclos_total) if ciclos_total else 0.0
 
+    # Bucketing diário em BRT (UTC-3) - storage continua UTC, mas
+    # /api/metricas/overview reporta "dia operacional local" do MMB.
+    # Sem o modifier, eventos rodados entre 21:00-23:59 BRT caem no
+    # dia UTC seguinte e aparecem no bucket errado pro operador.
+    # Decisão MVP: hardcode `-3 hours`. Promover pra env var se DST
+    # voltar no Brasil ou se a operação ficar multi-timezone.
     custo_dia = conn.execute(
         """
-        SELECT substr(planner_invoked_at, 1, 10) AS dia,
+        SELECT substr(datetime(planner_invoked_at, '-3 hours'), 1, 10) AS dia,
                COALESCE(SUM(cost_usd), 0.0) AS usd
         FROM ciclos
         WHERE planner_invoked_at >= ?
@@ -781,7 +787,8 @@ def metrics_overview(conn: sqlite3.Connection, days: int = 30) -> dict[str, Any]
     ).fetchall()
     ciclos_dia = conn.execute(
         """
-        SELECT substr(planner_invoked_at, 1, 10) AS dia, COUNT(*) AS n
+        SELECT substr(datetime(planner_invoked_at, '-3 hours'), 1, 10) AS dia,
+               COUNT(*) AS n
         FROM ciclos
         WHERE planner_invoked_at >= ?
         GROUP BY dia
