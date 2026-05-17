@@ -6,12 +6,15 @@ Use `create_app(db_path=...)` em testes pra apontar pra DB temporário.
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from mmb_logger import __version__
+from mmb_logger.api import reconcile_scheduler
 from mmb_logger.api.routes import (
     andaime_versions,
     ciclos,
@@ -20,6 +23,7 @@ from mmb_logger.api.routes import (
     health_detailed,
     metricas,
     projetos,
+    reconcile,
 )
 from mmb_logger.db import resolve_db_path
 
@@ -27,10 +31,24 @@ from mmb_logger.db import resolve_db_path
 def create_app(db_path: str | os.PathLike[str] | None = None) -> FastAPI:
     """Cria FastAPI app. `db_path` sobrescreve resolução padrão se fornecido."""
     resolved = resolve_db_path(db_path) if db_path else resolve_db_path()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Startup: cron interno do reconcile. Ligado por default; pode
+        # ser desligado via MMB_LOGGER_RECONCILE_AUTO=0. CLI manual
+        # (`uv run mmb-logger reconcile`) continua sendo a fonte de
+        # verdade operacional pra debug/emergência.
+        reconcile_scheduler.start_scheduler(db_path=str(resolved))
+        try:
+            yield
+        finally:
+            await reconcile_scheduler.stop_scheduler()
+
     app = FastAPI(
         title="mmb-logger",
         version=__version__,
         description="API de leitura/escrita pro Cockpit consumir épicos e ciclos do andaime.",
+        lifespan=lifespan,
     )
 
     app.state.db_path = Path(resolved)
@@ -63,6 +81,7 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> FastAPI:
     app.include_router(metricas.router)
     app.include_router(andaime_versions.router)
     app.include_router(health_detailed.router)
+    app.include_router(reconcile.router)
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

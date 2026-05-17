@@ -73,11 +73,36 @@ uv sync                              # instala deps
 uv run mmb-logger init-db            # cria/migra schema
 uv run mmb-logger reconcile          # projeta GH + filesystem → DB
 uv run mmb-logger reconcile --reset  # ⚠ DESTRUTIVO — drop ciclos+epicos
-uv run mmb-logger serve              # API REST em :8765
+uv run mmb-logger serve              # API REST em :8765 (+ cron interno)
 uv run pytest -q                     # testes
 uv run ruff check src tests          # lint
 uv run ruff check --fix src tests    # autofix
 ```
+
+## Reconcile automático (v0.4+)
+
+O `serve` mantém um **cron interno** que dispara `reconcile()` periodicamente,
+pra reduzir a fricção de rodar `mmb-logger reconcile` à mão sempre que algo
+muda no andaime. A CLI manual continua sendo a **fonte de verdade operacional
+pra debug/emergência** — todos os caminhos automáticos invocam a mesma
+função `reconcile()`.
+
+| Mecanismo | Como dispara | Quando usar |
+|---|---|---|
+| Cron interno (default) | A cada `MMB_LOGGER_RECONCILE_INTERVAL` segundos (default `300`) | Conveniência. Liga junto com `serve` |
+| `POST /api/reconcile` | Trigger manual via HTTP | Cockpit, scripts, debug rápido sem esperar o tick |
+| `uv run mmb-logger reconcile` | CLI | Debug, CI, ambientes sem `serve` rodando, **emergência** |
+
+Env:
+- `MMB_LOGGER_RECONCILE_AUTO=0` desliga o cron interno (default ligado).
+- `MMB_LOGGER_RECONCILE_INTERVAL=<seg>` ajusta o intervalo.
+
+Observabilidade:
+- `GET /api/reconcile-status` → `auto_enabled`, `interval_seconds`, `running`,
+  `last_run_ts`, `last_status` (`ok|error`), `last_error_msg`, `last_result`.
+- Falha do reconcile **não derruba o serve**. Próximo tick continua tentando.
+- Se o `serve` cair, **não há reconcile automático** — use a CLI ou suba o
+  `serve` de novo. O endpoint manual também fica indisponível.
 
 ## Domínios na DB
 
