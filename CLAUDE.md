@@ -73,7 +73,10 @@ uv sync                              # instala deps
 uv run mmb-logger init-db            # cria/migra schema
 uv run mmb-logger reconcile          # projeta GH + filesystem → DB
 uv run mmb-logger reconcile --reset  # ⚠ DESTRUTIVO — drop ciclos+epicos
-uv run mmb-logger serve              # API REST em :8765 (+ cron interno)
+uv run mmb-logger serve              # API REST em :8765 (+ cron interno; default sem reload)
+uv run mmb-logger serve --reload     # idem com auto-reload em mudanças de *.py
+                                     # — uso pra dev local (ex: up.sh do andaime);
+                                     # NÃO usar em produção real.
 uv run pytest -q                     # testes
 uv run ruff check src tests          # lint
 uv run ruff check --fix src tests    # autofix
