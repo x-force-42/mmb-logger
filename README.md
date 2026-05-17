@@ -39,15 +39,27 @@ uv run mmb-logger ingest-once
 # Modo watch: varre uma vez (catch-up) e observa mudanças.
 uv run mmb-logger watch
 
-# Sobe API.
+# Sobe API + cron interno do reconcile.
 uv run mmb-logger serve
 # default: http://127.0.0.1:8765 — docs em /docs
+
+# Trigger imediato sem esperar o tick do cron:
+curl -X POST http://127.0.0.1:8765/api/reconcile
+# Status do cron:
+curl http://127.0.0.1:8765/api/reconcile-status
 ```
+
+A CLI `uv run mmb-logger reconcile` continua sendo a **fonte de verdade
+operacional pra debug/emergência**. O cron interno do `serve` é apenas
+conveniência: chama a mesma função. Se o `serve` estiver caído, não há
+reconcile automático — use a CLI.
 
 ### Variáveis de ambiente
 
 - `MMB_LOGGER_DB_PATH` — caminho do SQLite (default: `./mmb-logger.db`).
 - `MMB_LOGGER_TOOLING_PATH` — raiz do `.tooling/` (default: `/home/eliezer/llab/MMB/.tooling`).
+- `MMB_LOGGER_RECONCILE_AUTO` — `0` desliga o cron interno (default ligado).
+- `MMB_LOGGER_RECONCILE_INTERVAL` — intervalo do cron em segundos (default `300`).
 
 ## Desenvolvimento
 
