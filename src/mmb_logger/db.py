@@ -658,9 +658,15 @@ def _semver_key(v: str) -> tuple[int, ...]:
 
 
 def list_andaime_versions(conn: sqlite3.Connection) -> list[str]:
-    """Versões distintas de `ciclos.andaime_version`, semver-desc, sem NULL."""
+    """Versões distintas presentes em ciclos OU épicos, semver-desc, sem NULL."""
     rows = conn.execute(
-        "SELECT DISTINCT andaime_version FROM ciclos WHERE andaime_version IS NOT NULL"
+        """
+        SELECT DISTINCT andaime_version FROM (
+            SELECT andaime_version FROM ciclos WHERE andaime_version IS NOT NULL
+            UNION
+            SELECT andaime_version FROM epicos WHERE andaime_version IS NOT NULL
+        )
+        """
     ).fetchall()
     versions = [r[0] for r in rows]
     return sorted(versions, key=_semver_key, reverse=True)

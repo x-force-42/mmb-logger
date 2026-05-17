@@ -217,6 +217,80 @@ def test_list_andaime_versions_handles_atypical_tags(conn: sqlite3.Connection):
     assert list_andaime_versions(conn) == ["v1.0.0-rc1", "v0.10.0", "v0.1", "v0"]
 
 
+def _ep(conn: sqlite3.Connection, ep_id: str, av: str | None) -> None:
+    upsert_epico(
+        conn,
+        id=ep_id,
+        slug=ep_id,
+        started_at=f"2026-01-01T00:00:{int(ep_id[-1]):02d}Z",
+        intencao="x",
+        andaime_version=av,
+    )
+
+
+def _ci(conn: sqlite3.Connection, ciclo_id: str, ep_id: str, av: str | None) -> None:
+    upsert_ciclo(
+        conn,
+        id=ciclo_id,
+        epico_id=ep_id,
+        project="p",
+        planner_invoked_at=f"2026-01-01T00:00:{int(ciclo_id[-1]):02d}Z",
+        status="iniciado",
+        instruction="i",
+        andaime_version=av,
+    )
+
+
+def test_list_andaime_versions_only_in_ciclos(conn: sqlite3.Connection):
+    # Versão presente só em ciclos (epico vinculado tem version NULL) → aparece.
+    _ep(conn, "ep1", None)
+    _ci(conn, "c1", "ep1", "v1.0.0")
+
+    assert list_andaime_versions(conn) == ["v1.0.0"]
+
+
+def test_list_andaime_versions_only_in_epicos(conn: sqlite3.Connection):
+    # Versão presente só em epicos (ciclo vinculado tem version NULL) → aparece.
+    _ep(conn, "ep1", "v2.0.0")
+    _ci(conn, "c1", "ep1", None)
+
+    assert list_andaime_versions(conn) == ["v2.0.0"]
+
+
+def test_list_andaime_versions_no_duplication_when_in_both(conn: sqlite3.Connection):
+    # Versão presente em ciclos E epicos → aparece apenas 1 vez.
+    _ep(conn, "ep1", "v3.0.0")
+    _ci(conn, "c1", "ep1", "v3.0.0")
+
+    assert list_andaime_versions(conn) == ["v3.0.0"]
+
+
+def test_list_andaime_versions_realistic_mix(conn: sqlite3.Connection):
+    # Replica estado do DB real: ciclos {v0.7.0, v0.9.0}, epicos {v0.5.0, v0.7.0, v0.8.0}.
+    # União esperada: [v0.9.0, v0.8.0, v0.7.0, v0.5.0].
+    _ep(conn, "ep1", "v0.5.0")
+    _ci(conn, "c1", "ep1", None)
+
+    _ep(conn, "ep2", "v0.7.0")
+    _ci(conn, "c2", "ep2", "v0.7.0")
+
+    _ep(conn, "ep3", "v0.8.0")
+    _ci(conn, "c3", "ep3", None)
+
+    _ep(conn, "ep4", None)
+    _ci(conn, "c4", "ep4", "v0.9.0")
+
+    assert list_andaime_versions(conn) == ["v0.9.0", "v0.8.0", "v0.7.0", "v0.5.0"]
+
+
+def test_list_andaime_versions_null_in_both_excluded(conn: sqlite3.Connection):
+    # NULL em ciclos E epicos → não vaza pro resultado.
+    _ep(conn, "ep1", None)
+    _ci(conn, "c1", "ep1", None)
+
+    assert list_andaime_versions(conn) == []
+
+
 def test_count_ciclos_empty(conn: sqlite3.Connection):
     assert count_ciclos(conn) == 0
 
