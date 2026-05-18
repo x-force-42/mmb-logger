@@ -129,3 +129,58 @@ def reconcile_cmd(
             typer.echo(f"  - {w}")
 
 
+@app.command("backfill-model")
+def backfill_model_cmd(
+    db: str | None = typer.Option(None, "--db", help="Caminho do SQLite."),
+    tooling_root: str | None = typer.Option(
+        None,
+        "--tooling-root",
+        help="Raiz do .tooling/ (default: env MMB_LOGGER_TOOLING_PATH).",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Não escreve no DB nem no journal; só imprime contagens.",
+    ),
+) -> None:
+    """Backfill heurístico de `ciclos.model` pra ciclos pré-T1.
+
+    One-shot. Idempotente (re-rodar não regride; warnings deduplicados via
+    journal). Mapeia janelas temporais do default de `MMB_MODE` em
+    `.tooling/config.sh` pro modelo do planner default daquele modo.
+
+    Só toca `ciclos` com `model IS NULL AND closed_complete_at IS NOT NULL`.
+    Coluna humana (`assertiveness_score`, `review_note`) é intocada por
+    construção — UPDATE só escreve `model`. Ciclos `abortado` anteriores
+    à primeira janela MMB_MODE=normal são silenciados (borda histórica).
+    """
+    from mmb_logger.backfill.model import backfill_model as _backfill
+
+    try:
+        result = _backfill(
+            db_path=db,
+            tooling_root=tooling_root,
+            dry_run=dry_run,
+        )
+    except RuntimeError as exc:
+        typer.secho(f"Erro: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    prefix = "[dry-run] " if dry_run else ""
+    typer.echo(f"{prefix}candidatos (model NULL + closed_complete): {result.candidates}")
+    typer.echo(f"{prefix}backfilled: {result.backfilled}")
+    if result.by_model:
+        for model, n in sorted(result.by_model.items()):
+            typer.echo(f"  {model}: {n}")
+    typer.echo(f"{prefix}ambíguos (NULL preservado): {result.ambiguous}")
+    typer.echo(f"  warnings emitidos no journal: {result.warnings_emitted}")
+    typer.echo(f"  warnings deduplicados (já no journal): {result.warnings_skipped_dedup}")
+    typer.echo(f"{prefix}abortados pré-MMB_MODE pulados: {result.skipped_pre_window_abort}")
+    if result.ambiguous_samples:
+        typer.echo("Sample de ambíguos (primeiros 10):")
+        for s in result.ambiguous_samples:
+            typer.echo(
+                f"  - {s['cycle_id']} ({s['planner_invoked_at']}) → {s['reason']}"
+            )
+
+
