@@ -71,6 +71,7 @@ def init_db(db_path: str | os.PathLike[str] | None = None) -> Path:
         for stmt in (
             "ALTER TABLE epicos ADD COLUMN andaime_version TEXT",
             "ALTER TABLE ciclos ADD COLUMN andaime_version TEXT",
+            "ALTER TABLE ciclos ADD COLUMN model TEXT",
             "ALTER TABLE eventos ADD COLUMN source_key TEXT",
         ):
             try:
@@ -210,6 +211,7 @@ def _row_to_ciclo(row: sqlite3.Row) -> dict[str, Any]:
         "abort_origin": row["abort_origin"],
         "abort_reason": row["abort_reason"],
         "andaime_version": row["andaime_version"],
+        "model": row["model"],
     }
 
 

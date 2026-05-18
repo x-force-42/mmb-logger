@@ -3,7 +3,12 @@
 Schema esperado por linha:
 {"ts": "ISO8601", "ev": "spawn|deregister|heartbeat",
  "id": "...", "parent": "...", "pane": "...", "pid": N,
- "reason": "...?", "task": "...?", "epic": "...?"}
+ "reason": "...?", "task": "...?", "epic": "...?",
+ "model": "claude-...?"}
+
+`model` é gravado pelo andaime em eventos `spawn` (T1 do épico
+logger-model-tracking). Linhas antigas/sem modelo conhecido vêm
+ausentes — tolerância via `None`.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ class AgentEvent:
     reason: str | None
     task: str | None
     epic: str | None
+    model: str | None
     raw: dict
 
 
@@ -45,6 +51,8 @@ def parse_line(line: str) -> AgentEvent | None:
         pid_int = int(pid_val) if pid_val is not None else None
     except (TypeError, ValueError):
         pid_int = None
+    model_val = d.get("model")
+    model_str = str(model_val) if isinstance(model_val, str) and model_val else None
     return AgentEvent(
         ts=str(d["ts"]),
         ev=str(d["ev"]),
@@ -55,6 +63,7 @@ def parse_line(line: str) -> AgentEvent | None:
         reason=d.get("reason") or None,
         task=d.get("task") or None,
         epic=d.get("epic") or None,
+        model=model_str,
         raw=d,
     )
 
