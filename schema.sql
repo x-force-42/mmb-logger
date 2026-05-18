@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS ciclos (
   diff_added INTEGER,
   diff_deleted INTEGER,
   diff_files INTEGER,
-  andaime_version TEXT
+  andaime_version TEXT,
+  model TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_ciclos_epico ON ciclos(epico_id);

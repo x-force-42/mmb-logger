@@ -52,6 +52,7 @@ class Ciclo(BaseModel):
     abort_origin: AbortOrigin | None = None
     abort_reason: str | None = None
     andaime_version: str | None = None
+    model: str | None = None
 
 
 class CicloDetail(Ciclo):

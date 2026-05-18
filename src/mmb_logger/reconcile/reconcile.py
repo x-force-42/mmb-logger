@@ -51,6 +51,7 @@ from mmb_logger.reconcile.intents import (
     load_intent_text,
     parse_closed_marker,
 )
+from mmb_logger.reconcile.planner_models import load_planner_models
 from mmb_logger.reconcile.transcripts import CostResult, compute_cost_for_ciclo
 
 OWNER_DEFAULT = "x-force-42"
@@ -78,6 +79,8 @@ DERIVED_COLS = (
     "cost_usd",
     "tokens_input",
     "tokens_output",
+    # Fase 5 — captura de modelo Claude do planner (agents.jsonl spawn):
+    "model",
 )
 
 
@@ -184,6 +187,8 @@ def reconcile(
     # Fase 4 inputs — injetáveis pra teste:
     claude_projects_root: str | Path | None = None,
     mmb_root: str | Path | None = None,
+    # Fase 5 input — captura de modelo do planner (agents.jsonl):
+    planner_models: dict[tuple[str, str], str] | None = None,
 ) -> ReconcileResult:
     """Roda o reconcile completo (fase 1 + fase 2).
 
@@ -245,6 +250,11 @@ def reconcile(
         now_epoch = time.time()
     threshold = resolve_stale_threshold_s(stale_threshold_s)
 
+    if planner_models is None:
+        planner_models = (
+            load_planner_models(tooling_path) if tooling_path else {}
+        )
+
     # Fase 4: root pros transcripts e mmb_root pra construir worktree path.
     # Defaults derivam de tooling_root (mmb_root = .tooling/..) e $HOME.
     if claude_projects_root is None:
@@ -303,6 +313,7 @@ def reconcile(
                     result,
                     mmb_root=mmb_root,
                     claude_projects_root=claude_projects_root,
+                    planner_models=planner_models,
                 )
 
             # 2. Briefings não-casados → iniciado ou abortado pré-GH
@@ -318,6 +329,7 @@ def reconcile(
                 threshold,
                 version,
                 result,
+                planner_models=planner_models,
             )
 
         # 3. Audit events (journal + agents + inbox) — fase 3.
@@ -420,6 +432,7 @@ def _process_issue(
     *,
     mmb_root: Path | None,
     claude_projects_root: Path | None,
+    planner_models: dict[tuple[str, str], str] | None = None,
 ) -> None:
     """Projeta uma issue (+ PR opcional + briefing casado opcional)."""
     if "task" not in issue.labels:
@@ -500,6 +513,9 @@ def _process_issue(
             ciclo_id=cycle_id,
         )
 
+    model = (
+        (planner_models or {}).get((epic_slug, project_short))
+    )
     derived = _build_derived(
         status=status,
         pr=pr,
@@ -507,6 +523,7 @@ def _process_issue(
         abort_signal=None,
         andaime_version=andaime_version,
         cost_result=cost_result,
+        model=model,
     )
 
     _upsert_ciclo_selective(
@@ -530,6 +547,8 @@ def _process_unmatched_briefings(
     stale_threshold_s: int,
     andaime_version: str | None,
     result: ReconcileResult,
+    *,
+    planner_models: dict[tuple[str, str], str] | None = None,
 ) -> None:
     """Briefings sem issue casada — criam ciclo iniciado ou abortado pré-GH.
 
@@ -556,12 +575,14 @@ def _process_unmatched_briefings(
         if inserted:
             result.epicos_upserted += 1
 
+        model = (planner_models or {}).get((b.epic_slug, b.project_short))
         derived = _build_derived(
             status=status,
             pr=None,
             briefing=b,
             abort_signal=signal,
             andaime_version=andaime_version,
+            model=model,
         )
 
         _upsert_ciclo_selective(
@@ -598,6 +619,7 @@ def _build_derived(
     abort_signal: AbortSignal | None,
     andaime_version: str | None,
     cost_result: CostResult | None = None,
+    model: str | None = None,
 ) -> dict[str, object]:
     """Constrói o dict de colunas derivadas pro UPSERT.
 
@@ -664,6 +686,7 @@ def _build_derived(
         "cost_usd": cost_usd,
         "tokens_input": tokens_input,
         "tokens_output": tokens_output,
+        "model": model,
     }
 
 
