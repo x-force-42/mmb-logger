@@ -11,13 +11,13 @@ Verifica:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from mmb_logger.db import get_conn, patch_ciclo
-from mmb_logger.reconcile.intents import parse_closed_marker
+from mmb_logger.reconcile.intents import load_archived_briefing, parse_closed_marker
 from mmb_logger.reconcile.reconcile import _enrich_epicos_closure, reconcile
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -50,6 +50,25 @@ def _write_briefing(tooling: Path, slug: str, content: str) -> None:
     dir_ = tooling / "intents" / f"2026-05-16-{slug}"
     dir_.mkdir(parents=True, exist_ok=True)
     (dir_ / "master-briefing.md").write_text(content, encoding="utf-8")
+
+
+def _write_archived_briefing(
+    tooling: Path,
+    slug: str,
+    content: str,
+    *,
+    run_id: str = "2026-05-16T17-49-09Z",
+    date_prefix: str = "2026-05-16",
+    mtime: float | None = None,
+) -> Path:
+    dir_ = tooling / "archive" / run_id / "intents" / f"{date_prefix}-{slug}"
+    dir_.mkdir(parents=True, exist_ok=True)
+    path = dir_ / "master-briefing.md"
+    path.write_text(content, encoding="utf-8")
+    if mtime is not None:
+        import os
+        os.utime(path, (mtime, mtime))
+    return path
 
 
 # ── parse_closed_marker ───────────────────────────────────────────────────────
@@ -190,6 +209,156 @@ def test_campos_humanos_preservados(db_path: Path, tooling: Path) -> None:
         ).fetchone()
     assert row["assertiveness_score"] == 4
     assert row["review_note"] == "bom trabalho"
+
+
+# ── Archive fallback (v0.11.0+) ───────────────────────────────────────────────
+
+
+def test_archive_fallback_fecha_epico_quando_briefing_arquivado(
+    db_path: Path, tooling: Path
+) -> None:
+    """Briefing ausente em intents/ + presente em archive com ✅ → fecha."""
+    archived = _write_archived_briefing(
+        tooling, "meu-epico", "# Épico\n\nStatus: ✅ fechado\n"
+    )
+    archive_mtime = archived.stat().st_mtime
+
+    with get_conn(db_path) as conn:
+        _insert_epico(conn, slug="meu-epico")
+        _enrich_epicos_closure(conn, tooling)
+        row = conn.execute(
+            "SELECT status, closed_at FROM epicos WHERE id='meu-epico'"
+        ).fetchone()
+
+    assert row["status"] == "fechado"
+    assert row["closed_at"] is not None
+    # closed_at deriva do mtime do arquivo (aproximação).
+    expected = (
+        datetime.fromtimestamp(archive_mtime, UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+    assert row["closed_at"] == expected
+
+
+def test_archive_fallback_briefing_ausente_em_ambos_permanece_aberto(
+    db_path: Path, tooling: Path
+) -> None:
+    """Sem briefing em intents/ nem em archive → permanece aberto (regressão)."""
+    with get_conn(db_path) as conn:
+        _insert_epico(conn, slug="meu-epico")
+        _enrich_epicos_closure(conn, tooling)
+        row = conn.execute(
+            "SELECT status, closed_at FROM epicos WHERE id='meu-epico'"
+        ).fetchone()
+
+    assert row["status"] == "aberto"
+    assert row["closed_at"] is None
+
+
+def test_archive_fallback_multiplos_arquivos_pega_mais_recente(
+    db_path: Path, tooling: Path
+) -> None:
+    """Mesmo slug em múltiplos runs do archive → mtime mais recente vence."""
+    old_path = _write_archived_briefing(
+        tooling,
+        "meu-epico",
+        "# Épico\n\nStatus: ⏳ em execução\n",
+        run_id="2026-05-15T01-11-34Z",
+        date_prefix="2026-05-15",
+        mtime=1_700_000_000.0,
+    )
+    new_path = _write_archived_briefing(
+        tooling,
+        "meu-epico",
+        "# Épico\n\nStatus: ✅ fechado\n",
+        run_id="2026-05-16T17-49-09Z",
+        date_prefix="2026-05-16",
+        mtime=1_700_500_000.0,
+    )
+    assert old_path.stat().st_mtime < new_path.stat().st_mtime
+
+    with get_conn(db_path) as conn:
+        _insert_epico(conn, slug="meu-epico")
+        _enrich_epicos_closure(conn, tooling)
+        row = conn.execute(
+            "SELECT status, closed_at FROM epicos WHERE id='meu-epico'"
+        ).fetchone()
+
+    assert row["status"] == "fechado"
+    expected = (
+        datetime.fromtimestamp(
+            new_path.stat().st_mtime,
+            UTC,
+        )
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+    assert row["closed_at"] == expected
+
+
+def test_archive_fallback_intents_vence_archive(
+    db_path: Path, tooling: Path
+) -> None:
+    """intents/ é fonte primária — archive só é consultado se intents/ ausente."""
+    # intents/ sem ✅, archive com ✅ → não deve fechar (intents/ vence).
+    _write_briefing(tooling, "meu-epico", "# Épico\n\nStatus: 🎯 ativo\n")
+    _write_archived_briefing(
+        tooling, "meu-epico", "# Épico\n\nStatus: ✅ fechado\n"
+    )
+
+    with get_conn(db_path) as conn:
+        _insert_epico(conn, slug="meu-epico")
+        _enrich_epicos_closure(conn, tooling)
+        row = conn.execute(
+            "SELECT status, closed_at FROM epicos WHERE id='meu-epico'"
+        ).fetchone()
+
+    assert row["status"] == "aberto"
+    assert row["closed_at"] is None
+
+
+def test_archive_fallback_idempotente(db_path: Path, tooling: Path) -> None:
+    """Rodar reconcile 2x com fallback do archive → closed_at não regride."""
+    _write_archived_briefing(
+        tooling, "meu-epico", "# Épico\n\nStatus: ✅ fechado\n"
+    )
+
+    with get_conn(db_path) as conn:
+        _insert_epico(conn, slug="meu-epico")
+        _enrich_epicos_closure(conn, tooling)
+        first = conn.execute(
+            "SELECT status, closed_at FROM epicos WHERE id='meu-epico'"
+        ).fetchone()
+        _enrich_epicos_closure(conn, tooling)
+        second = conn.execute(
+            "SELECT status, closed_at FROM epicos WHERE id='meu-epico'"
+        ).fetchone()
+
+    assert first["status"] == "fechado"
+    assert second["status"] == "fechado"
+    assert first["closed_at"] == second["closed_at"]
+
+
+def test_load_archived_briefing_helper(tooling: Path) -> None:
+    """Helper retorna (texto, mtime_iso) ou (None, None) quando ausente."""
+    assert load_archived_briefing(tooling, "ausente") == (None, None)
+
+    path = _write_archived_briefing(
+        tooling, "presente", "# Conteúdo\n\nStatus: ✅\n"
+    )
+    text, mtime_iso = load_archived_briefing(tooling, "presente")
+    assert text is not None
+    assert "Status: ✅" in text
+    expected = (
+        datetime.fromtimestamp(
+            path.stat().st_mtime,
+            UTC,
+        )
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+    assert mtime_iso == expected
 
 
 # ── Regressão: epicos.intencao continua sendo preenchido ─────────────────────
