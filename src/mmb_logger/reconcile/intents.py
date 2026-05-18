@@ -12,6 +12,7 @@ datas diferentes — re-dispatches), escolhe o mais recente lexicograficamente
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Tamanho máximo de intenção. Cockpit mostra a primeira linha; passar muito
@@ -54,6 +55,56 @@ def load_briefing_text(tooling_root: Path, epic_slug: str) -> str | None:
     except OSError:
         return None
     return text or None
+
+
+def load_archived_briefing(
+    tooling_root: Path, epic_slug: str
+) -> tuple[str | None, str | None]:
+    """Procura master-briefing.md arquivado pra `epic_slug` no archive.
+
+    Glob: `.tooling/archive/*/intents/*-<slug>/master-briefing.md`. Aceita
+    qualquer prefixo de data (`<YYYY-MM-DD>-` ou `<YYYY-MM-DDTHH-MM-SSZ>-`).
+    Quando múltiplos arquivos casam (mesmo slug arquivado em runs distintos
+    do `mmb-reset.sh`), escolhe o de mtime mais recente — comportamento
+    determinístico que cobre re-arquivamentos.
+
+    Retorna `(texto, mtime_iso)`. `mtime_iso` é UTC ISO 8601 com sufixo Z,
+    usado como aproximação de `closed_at` quando o fechamento foi observado
+    indiretamente via archive. Se não achar nada, retorna `(None, None)`.
+    """
+    archive_root = Path(tooling_root) / "archive"
+    if not archive_root.is_dir():
+        return None, None
+
+    candidates: list[Path] = []
+    for run_dir in archive_root.iterdir():
+        intents_dir = run_dir / "intents"
+        if not intents_dir.is_dir():
+            continue
+        for d in intents_dir.iterdir():
+            if not d.is_dir() or not d.name.endswith(f"-{epic_slug}"):
+                continue
+            briefing_path = d / "master-briefing.md"
+            if briefing_path.is_file():
+                candidates.append(briefing_path)
+
+    if not candidates:
+        return None, None
+
+    chosen = max(candidates, key=lambda p: p.stat().st_mtime)
+    try:
+        text = chosen.read_text(encoding="utf-8")
+    except OSError:
+        return None, None
+    if not text:
+        return None, None
+
+    mtime_iso = (
+        datetime.fromtimestamp(chosen.stat().st_mtime, UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+    return text, mtime_iso
 
 
 def parse_closed_marker(text: str) -> bool:

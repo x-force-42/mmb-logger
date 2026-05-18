@@ -47,6 +47,7 @@ from mmb_logger.reconcile.derive import (
 from mmb_logger.reconcile.gh import REPOS, GhIssue, GhPr, fetch_issues, fetch_prs
 from mmb_logger.reconcile.inbox import Briefing, BriefingsLoaded, load_briefings
 from mmb_logger.reconcile.intents import (
+    load_archived_briefing,
     load_briefing_text,
     load_intent_text,
     parse_closed_marker,
@@ -373,13 +374,17 @@ def _enrich_epicos_closure(conn: sqlite3.Connection, tooling_root: Path) -> None
     """Projeta fechamento explícito do briefing pra epicos.status/closed_at.
 
     Regra (source-of-truth.md §epicos.status):
-      ✅ presente + aberto                  → fecha (now)
-      ✅ presente + fechado com closed_at   → no-op (preserva closed_at original)
-      ✅ ausente   + fechado                → reabre (status=aberto, closed_at=NULL)
-      ✅ ausente   + aberto                 → no-op
-      briefing ausente                      → tratado como ✅ ausente
+      ✅ presente em intents/  + aberto                  → fecha (now)
+      ✅ presente em archive/  + aberto                  → fecha (mtime do arquivo)
+      ✅ presente              + fechado com closed_at   → no-op (preserva original)
+      ✅ ausente em ambos      + fechado                 → reabre (status=aberto, closed_at=NULL)
+      ✅ ausente em ambos      + aberto                  → no-op
+      briefing ausente em ambos                          → tratado como ✅ ausente
 
-    Campos humanos não são tocados.
+    Archive é fallback secundário pra cobrir épicos cujos briefings foram
+    arquivados pelo `mmb-reset.sh`. `closed_at` derivado de mtime é
+    aproximação — fidelidade absoluta ao instante de fechamento original
+    não é garantida. Campos humanos não são tocados.
     """
     rows = conn.execute(
         "SELECT id, slug, status, closed_at FROM epicos"
@@ -388,13 +393,19 @@ def _enrich_epicos_closure(conn: sqlite3.Connection, tooling_root: Path) -> None
 
     for row in rows:
         text = load_briefing_text(tooling_root, row["slug"])
+        closed_at_from_archive: str | None = None
+        if text is None:
+            text, closed_at_from_archive = load_archived_briefing(
+                tooling_root, row["slug"]
+            )
+
         is_closed_marker = bool(text) and parse_closed_marker(text)
 
         if is_closed_marker:
             if row["status"] != "fechado" or row["closed_at"] is None:
                 conn.execute(
                     "UPDATE epicos SET status='fechado', closed_at=? WHERE id=?",
-                    (now, row["id"]),
+                    (closed_at_from_archive or now, row["id"]),
                 )
         else:
             if row["status"] == "fechado":
