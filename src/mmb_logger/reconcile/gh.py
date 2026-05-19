@@ -11,7 +11,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
-REPOS = ("mmb-core", "mmb-cockpit", "mmb-aquarium", "mmb-logger")
+REPOS = ("mmb-cockpit", "mmb-aquarium", "mmb-logger")
 
 
 @dataclass(frozen=True)

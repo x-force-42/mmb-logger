@@ -98,8 +98,8 @@ def encode_worktree_path(abs_path: str) -> str:
     """Convenção do Claude Code: substitui `/` e `.` por `-`.
 
     Validado fase 0 com transcripts reais do MMB:
-      /home/eliezer/llab/MMB/mmb-core/.worktrees/X1-cleanup-task-scripts
-      → -home-eliezer-llab-MMB-mmb-core--worktrees-X1-cleanup-task-scripts
+      /home/eliezer/llab/MMB/mmb-cockpit/.worktrees/X1-cleanup-task-scripts
+      → -home-eliezer-llab-MMB-mmb-cockpit--worktrees-X1-cleanup-task-scripts
     """
     return abs_path.replace("/", "-").replace(".", "-")
 
