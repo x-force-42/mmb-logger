@@ -754,3 +754,237 @@ def test_sum_usage_from_transcript_empty_file(tmp_path: Path):
     s = sum_usage_from_transcript(f)
     assert s.valid_turns == 0
     assert s.input_tokens == 0
+
+
+# ── Fallback de model via transcripts (L6 / e-2026-05-19-011) ─────────
+
+
+def _seed_agents_jsonl(tooling_root: Path, lines: list[str]) -> None:
+    state = tooling_root / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "agents.jsonl").write_text("".join(lines), encoding="utf-8")
+
+
+def _planner_spawn_line(
+    *, ts: str, agent_id: str, epic: str, model: str, pid: int = 1234
+) -> str:
+    return (
+        json.dumps(
+            {
+                "ts": ts,
+                "ev": "spawn",
+                "id": agent_id,
+                "pid": pid,
+                "epic": epic,
+                "model": model,
+            }
+        )
+        + "\n"
+    )
+
+
+def test_model_fallback_uses_transcript_when_planner_empty(
+    db_path: Path, mmb_root: Path, claude_projects: Path
+):
+    """Sem entry em planner_models, model deriva do dominante do transcript."""
+    project_dir = _make_transcript_dir(
+        claude_projects, mmb_root, repo="mmb-core", wt_name="X1-fb-empty"
+    )
+    _write_transcript(
+        project_dir,
+        turns=[
+            _assistant_turn(model="claude-sonnet-4-6", input_tokens=100, output_tokens=200),
+            _assistant_turn(model="claude-sonnet-4-6", input_tokens=100, output_tokens=200),
+        ],
+    )
+    body = "<!-- mmb-cycle-key: e1/core/2026-05-16T10:00:00Z -->"
+    result = _run(
+        db_path,
+        mmb_root,
+        claude_projects,
+        issues={"mmb-core": [_issue(body=body)]},
+        prs={"mmb-core": [_pr(head_ref_name="task/X1-fb-empty", merged_at="2026-05-16T12:00:00Z")]},
+    )
+    assert not any("model-not-derivable" in w for w in result.warnings)
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT model FROM ciclos").fetchone()
+        assert row["model"] == "claude-sonnet-4-6"
+
+
+def test_model_fallback_planner_wins_when_both_present(
+    db_path: Path, mmb_root: Path, claude_projects: Path
+):
+    """Entry em planner_models tem precedência sobre transcript (backward-compat)."""
+    project_dir = _make_transcript_dir(
+        claude_projects, mmb_root, repo="mmb-core", wt_name="X1-fb-both"
+    )
+    _write_transcript(
+        project_dir,
+        turns=[
+            _assistant_turn(model="claude-sonnet-4-6", input_tokens=100, output_tokens=200),
+        ],
+    )
+    _seed_agents_jsonl(
+        db_path.parent,
+        [
+            _planner_spawn_line(
+                ts="2026-05-16T09:00:00Z",
+                agent_id="core",
+                epic="e1",
+                model="claude-opus-4-7",
+            ),
+        ],
+    )
+    body = "<!-- mmb-cycle-key: e1/core/2026-05-16T10:00:00Z -->"
+    _run(
+        db_path,
+        mmb_root,
+        claude_projects,
+        issues={"mmb-core": [_issue(body=body)]},
+        prs={"mmb-core": [_pr(head_ref_name="task/X1-fb-both", merged_at="2026-05-16T12:00:00Z")]},
+    )
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT model FROM ciclos").fetchone()
+        assert row["model"] == "claude-opus-4-7"
+
+
+def test_model_fallback_planner_only_no_transcript(
+    db_path: Path, mmb_root: Path, claude_projects: Path
+):
+    """Sem transcript + planner_models tem entry → caminho histórico vence."""
+    _seed_agents_jsonl(
+        db_path.parent,
+        [
+            _planner_spawn_line(
+                ts="2026-05-16T09:00:00Z",
+                agent_id="core",
+                epic="e1",
+                model="claude-opus-4-7",
+            ),
+        ],
+    )
+    body = "<!-- mmb-cycle-key: e1/core/2026-05-16T10:00:00Z -->"
+    result = _run(
+        db_path,
+        mmb_root,
+        claude_projects,
+        issues={"mmb-core": [_issue(body=body)]},
+        prs={"mmb-core": [_pr(head_ref_name="task/NEVER-RAN", merged_at="2026-05-16T12:00:00Z")]},
+    )
+    assert not any("model-not-derivable" in w for w in result.warnings)
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT model FROM ciclos").fetchone()
+        assert row["model"] == "claude-opus-4-7"
+
+
+def test_model_fallback_null_emits_warning_when_completo(
+    db_path: Path, mmb_root: Path, claude_projects: Path
+):
+    """Ciclo `completo` sem transcript e sem planner entry → NULL + warning."""
+    body = "<!-- mmb-cycle-key: e1/core/2026-05-16T10:00:00Z -->"
+    result = _run(
+        db_path,
+        mmb_root,
+        claude_projects,
+        issues={"mmb-core": [_issue(body=body)]},
+        prs={"mmb-core": [_pr(head_ref_name="task/NEVER-RAN", merged_at="2026-05-16T12:00:00Z")]},
+    )
+    assert any(
+        "model-not-derivable" in w and "sem transcript" in w
+        for w in result.warnings
+    )
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT model, status FROM ciclos").fetchone()
+        assert row["status"] == "completo"
+        assert row["model"] is None
+
+
+def test_model_fallback_null_no_warning_when_not_completo(
+    db_path: Path, mmb_root: Path, claude_projects: Path
+):
+    """Ciclo não-completo (ex.: planejado/pr_aberto) com model=None: sem warning."""
+    body = "<!-- mmb-cycle-key: e1/core/2026-05-16T10:00:00Z -->"
+    result = _run(
+        db_path,
+        mmb_root,
+        claude_projects,
+        issues={"mmb-core": [_issue(body=body)]},  # OPEN sem PR → planejado
+    )
+    assert not any("model-not-derivable" in w for w in result.warnings)
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT model, status FROM ciclos").fetchone()
+        assert row["status"] == "planejado"
+        assert row["model"] is None
+
+
+def test_model_fallback_idempotent(
+    db_path: Path, mmb_root: Path, claude_projects: Path
+):
+    """Reconcile rodado 2x produz o mesmo model derivado do transcript."""
+    project_dir = _make_transcript_dir(
+        claude_projects, mmb_root, repo="mmb-core", wt_name="X1-fb-idem"
+    )
+    _write_transcript(
+        project_dir,
+        turns=[
+            _assistant_turn(model="claude-sonnet-4-6", input_tokens=100, output_tokens=200),
+        ],
+    )
+    body = "<!-- mmb-cycle-key: e1/core/2026-05-16T10:00:00Z -->"
+    pr = _pr(head_ref_name="task/X1-fb-idem", merged_at="2026-05-16T12:00:00Z")
+    for _ in range(2):
+        _run(
+            db_path,
+            mmb_root,
+            claude_projects,
+            issues={"mmb-core": [_issue(body=body)]},
+            prs={"mmb-core": [pr]},
+        )
+    with get_conn(db_path) as conn:
+        rows = conn.execute("SELECT id, model FROM ciclos").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["model"] == "claude-sonnet-4-6"
+
+
+def test_model_fallback_preserves_human_columns(
+    db_path: Path, mmb_root: Path, claude_projects: Path
+):
+    """UPSERT que toca `model` não sobrescreve assertiveness_score nem review_note."""
+    from mmb_logger.db import get_conn as _get_conn
+    from mmb_logger.db import patch_ciclo
+
+    project_dir = _make_transcript_dir(
+        claude_projects, mmb_root, repo="mmb-core", wt_name="X1-fb-human"
+    )
+    _write_transcript(
+        project_dir,
+        turns=[
+            _assistant_turn(model="claude-sonnet-4-6", input_tokens=100, output_tokens=200),
+        ],
+    )
+    body = "<!-- mmb-cycle-key: e1/core/2026-05-16T10:00:00Z -->"
+    _run(
+        db_path,
+        mmb_root,
+        claude_projects,
+        issues={"mmb-core": [_issue(body=body)]},
+        prs={"mmb-core": [_pr(head_ref_name="task/X1-fb-human", merged_at="2026-05-16T12:00:00Z")]},
+    )
+    with _get_conn(db_path) as conn:
+        cid = conn.execute("SELECT id FROM ciclos").fetchone()["id"]
+        patch_ciclo(conn, cid, assertiveness_score=4, review_note="bom")
+
+    _run(
+        db_path,
+        mmb_root,
+        claude_projects,
+        issues={"mmb-core": [_issue(body=body)]},
+        prs={"mmb-core": [_pr(head_ref_name="task/X1-fb-human", merged_at="2026-05-16T12:00:00Z")]},
+    )
+    with _get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT model, assertiveness_score, review_note FROM ciclos"
+        ).fetchone()
+        assert row["model"] == "claude-sonnet-4-6"
+        assert row["assertiveness_score"] == 4
+        assert row["review_note"] == "bom"
