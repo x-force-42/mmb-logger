@@ -15,8 +15,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from mmb_logger.ingest.agents_stream import parse_line as parse_agent_line
+from mmb_logger.targets import historical_dest_ids
 
-_PLANNER_IDS = {"core", "cockpit", "aquarium", "logger"}
+# Ids de planner aceitos em agents.jsonl. Inclui targets atuais + 'core'
+# como alias histórico (eventos pré-2026-05). Ver historical_dest_ids.
+_PLANNER_IDS: set[str] = set(historical_dest_ids())
 
 
 def load_planner_models(tooling_root: Path) -> dict[tuple[str, str], str]:

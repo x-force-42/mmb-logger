@@ -11,7 +11,12 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
-REPOS = ("mmb-cockpit", "mmb-aquarium", "mmb-logger")
+from mmb_logger.targets import repos_tracked
+
+# Lista de repos varridos pelo reconciler. Derivada de
+# .tooling/targets.json (campo tracked_by_logger=True). Carregada
+# uma vez no import — mudanças no JSON exigem reload do processo.
+REPOS: tuple[str, ...] = repos_tracked()
 
 
 @dataclass(frozen=True)

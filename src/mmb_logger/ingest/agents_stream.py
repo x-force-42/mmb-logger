@@ -18,6 +18,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from mmb_logger.targets import historical_dest_ids
+
+# Prefixos aceitos em agent-id (`<project>-<task>`). Targets atuais +
+# 'core' como alias histórico. Não usar em runtime/dispatch.
+_VALID_AGENT_PREFIXES: tuple[str, ...] = historical_dest_ids()
+
 
 @dataclass
 class AgentEvent:
@@ -99,6 +105,6 @@ def decode_agent_id(agent_id: str) -> tuple[str | None, str | None]:
     if "-" not in agent_id:
         return (None, None)
     prefix, _, suffix = agent_id.partition("-")
-    if prefix not in ("core", "cockpit", "aquarium", "logger"):
+    if prefix not in _VALID_AGENT_PREFIXES:
         return (None, None)
     return (prefix, suffix or None)

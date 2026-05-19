@@ -22,6 +22,11 @@ from mmb_logger.ingest.agents_stream import decode_agent_id
 from mmb_logger.ingest.agents_stream import parse_line as parse_agent_line
 from mmb_logger.ingest.inbox import parse_inbox_file
 from mmb_logger.ingest.journal import parse_line as parse_journal_line
+from mmb_logger.targets import historical_dest_ids
+
+# Projetos aceitos para linkagem de ciclo. Inclui 'core' como alias
+# histórico — ver mmb_logger.targets.historical_dest_ids.
+_LINKABLE_PROJECTS: tuple[str, ...] = historical_dest_ids()
 
 
 @dataclass
@@ -167,7 +172,7 @@ def _write_inbox_events(
         ciclo_id = None
         if msg.thread:
             project_short = msg.to if msg.from_ == "master" else msg.from_
-            if project_short in ("core", "cockpit", "aquarium", "logger"):
+            if project_short in _LINKABLE_PROJECTS:
                 ciclo_id = _find_ciclo_by_epic_project(
                     conn, msg.thread, project_short
                 )

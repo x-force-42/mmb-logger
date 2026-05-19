@@ -15,9 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mmb_logger.ingest.inbox import parse_inbox_file
+from mmb_logger.targets import historical_dest_ids
 
-# Project shorts válidos como destinatários de briefing.
-REPOS_SHORT = ("core", "cockpit", "aquarium", "logger")
+# Project shorts aceitos como destinatários de briefing. Inclui targets
+# atuais (registry) + 'core' como alias histórico — briefings antigos
+# pré-2026-05 referenciam core. Ver mmb_logger.targets.historical_dest_ids.
+REPOS_SHORT: tuple[str, ...] = historical_dest_ids()
 
 
 @dataclass(frozen=True)

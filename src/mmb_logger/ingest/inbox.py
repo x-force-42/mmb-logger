@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mmb_logger.ingest.frontmatter import parse as parse_fm
+from mmb_logger.targets import historical_dest_ids
+
+# Slugs aceitos como projeto-alvo. Inclui targets atuais + 'core' como
+# alias histórico (mensagens pré-2026-05). Ver historical_dest_ids.
+_PROJECT_SLUGS: tuple[str, ...] = historical_dest_ids()
 
 
 @dataclass
@@ -21,8 +26,8 @@ class InboxMessage:
 
     @property
     def project_slug(self) -> str | None:
-        """Slug do projeto-alvo (core/cockpit/aquarium) ou None se for master."""
-        for repo in ("core", "cockpit", "aquarium", "logger"):
+        """Slug do projeto-alvo (cockpit/aquarium/logger ou histórico) ou None se for master."""
+        for repo in _PROJECT_SLUGS:
             if self.from_ == repo or self.to == repo:
                 return repo
         return None
