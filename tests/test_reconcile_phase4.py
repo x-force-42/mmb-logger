@@ -602,6 +602,151 @@ def test_find_transcripts_head_ref_fora_da_convencao(
     assert out == []
 
 
+def test_find_transcripts_external_target_via_registry(
+    tmp_path: Path, claude_projects: Path, monkeypatch
+):
+    """Target externo: worktree resolvida via `local_path` absoluto do registry.
+
+    Regressão pro bug em que `find_transcripts` compunha worktree sempre
+    como `<mmb_root>/<repo>/.worktrees/...`, falhando pra targets com
+    `kind=external` (worktree fora de `$MMB_ROOT`).
+    """
+    from mmb_logger.targets import Target
+
+    external_root = tmp_path / "external" / "campo-premiado"
+    (external_root / ".worktrees").mkdir(parents=True)
+    fake_target = Target(
+        id="campo-premiado",
+        dest="campo-premiado",
+        repo="campo-premiado",
+        local_path=str(external_root),
+        worker_profile="project-orchestrator.md",
+        agent_layer="project",
+        tracked_by_logger=True,
+        kind="external",
+    )
+    monkeypatch.setattr(
+        "mmb_logger.reconcile.transcripts.load_targets",
+        lambda: [fake_target],
+    )
+
+    mmb_root = tmp_path / "MMB"
+    mmb_root.mkdir()
+    wt_name = "X9-feat"
+    worktree_path = str(external_root / ".worktrees" / wt_name)
+    encoded = encode_worktree_path(worktree_path)
+    project_dir = claude_projects / encoded
+    project_dir.mkdir(parents=True)
+    jsonl = project_dir / "s1.jsonl"
+    jsonl.write_text("{}\n")
+
+    out = find_transcripts(
+        mmb_root=mmb_root,
+        repo="campo-premiado",
+        head_ref_name=f"task/{wt_name}",
+        claude_projects_root=claude_projects,
+    )
+    assert out == [jsonl]
+
+
+def test_find_transcripts_relative_local_path_resolves_under_mmb_root(
+    tmp_path: Path, claude_projects: Path, monkeypatch
+):
+    """`local_path` relativo: resolvido como `mmb_root / local_path`."""
+    from mmb_logger.targets import Target
+
+    fake_target = Target(
+        id="cockpit",
+        dest="cockpit",
+        repo="mmb-cockpit",
+        local_path="mmb-cockpit",
+        worker_profile="project-orchestrator.md",
+        agent_layer="project",
+        tracked_by_logger=True,
+        kind="internal",
+    )
+    monkeypatch.setattr(
+        "mmb_logger.reconcile.transcripts.load_targets",
+        lambda: [fake_target],
+    )
+
+    mmb_root = tmp_path / "MMB"
+    (mmb_root / "mmb-cockpit" / ".worktrees").mkdir(parents=True)
+    wt_name = "Z1-bar"
+    worktree_path = str(mmb_root / "mmb-cockpit" / ".worktrees" / wt_name)
+    encoded = encode_worktree_path(worktree_path)
+    project_dir = claude_projects / encoded
+    project_dir.mkdir(parents=True)
+    jsonl = project_dir / "s1.jsonl"
+    jsonl.write_text("{}\n")
+
+    out = find_transcripts(
+        mmb_root=mmb_root,
+        repo="mmb-cockpit",
+        head_ref_name=f"task/{wt_name}",
+        claude_projects_root=claude_projects,
+    )
+    assert out == [jsonl]
+
+
+def test_find_transcripts_repo_fora_do_registry_usa_fallback(
+    mmb_root: Path, claude_projects: Path, monkeypatch
+):
+    """Repo ausente do registry cai no fallback `<mmb_root>/<repo>/.worktrees`.
+
+    Backward-compat com fixtures históricas (ex.: `mmb-core`).
+    """
+    monkeypatch.setattr(
+        "mmb_logger.reconcile.transcripts.load_targets",
+        lambda: [],
+    )
+
+    wt_name = "X1-foo"
+    worktree_path = str(mmb_root / "mmb-core" / ".worktrees" / wt_name)
+    encoded = encode_worktree_path(worktree_path)
+    project_dir = claude_projects / encoded
+    project_dir.mkdir(parents=True)
+    jsonl = project_dir / "s1.jsonl"
+    jsonl.write_text("{}\n")
+
+    out = find_transcripts(
+        mmb_root=mmb_root,
+        repo="mmb-core",
+        head_ref_name=f"task/{wt_name}",
+        claude_projects_root=claude_projects,
+    )
+    assert out == [jsonl]
+
+
+def test_find_transcripts_load_targets_failure_falls_back(
+    mmb_root: Path, claude_projects: Path, monkeypatch
+):
+    """`load_targets()` levanta: caímos no fallback retro-compat sem crashar."""
+
+    def _boom():
+        raise RuntimeError("registry indisponível")
+
+    monkeypatch.setattr(
+        "mmb_logger.reconcile.transcripts.load_targets", _boom
+    )
+
+    wt_name = "X2-baz"
+    worktree_path = str(mmb_root / "mmb-core" / ".worktrees" / wt_name)
+    encoded = encode_worktree_path(worktree_path)
+    project_dir = claude_projects / encoded
+    project_dir.mkdir(parents=True)
+    jsonl = project_dir / "s1.jsonl"
+    jsonl.write_text("{}\n")
+
+    out = find_transcripts(
+        mmb_root=mmb_root,
+        repo="mmb-core",
+        head_ref_name=f"task/{wt_name}",
+        claude_projects_root=claude_projects,
+    )
+    assert out == [jsonl]
+
+
 def test_sum_usage_from_transcript_empty_file(tmp_path: Path):
     """Arquivo vazio: nenhum turn lido, malformed_lines = 0."""
     f = tmp_path / "empty.jsonl"
