@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from mmb_logger.db import get_conn
+from mmb_logger.db import get_conn, upsert_projeto
 from mmb_logger.reconcile._runtime import resolve_andaime_version, resolve_tooling_root
 from mmb_logger.reconcile.abort import (
     AbortSignal,
@@ -54,7 +54,7 @@ from mmb_logger.reconcile.intents import (
 )
 from mmb_logger.reconcile.planner_models import load_planner_models
 from mmb_logger.reconcile.transcripts import CostResult, compute_cost_for_ciclo
-from mmb_logger.targets import load_targets
+from mmb_logger.targets import Target, load_targets
 
 OWNER_DEFAULT = "x-force-42"
 
@@ -100,6 +100,56 @@ class ReconcileResult:
 
 def _project_short(repo: str) -> str:
     return repo.removeprefix("mmb-")
+
+
+def _projeto_id_from_target(target: Target) -> str:
+    """Convenção: id/slug do projeto = `target.repo`.
+
+    Para internos isso é `mmb-<id>` (ex.: `mmb-cockpit`); para externos
+    é o próprio `<id>` (ex.: `campo-premiado`). Reflete o que já existe
+    em `projetos` (mmb-cockpit, mmb-aquarium, mmb-core).
+    """
+    return target.repo
+
+
+def _projeto_name_from_repo(repo: str) -> str:
+    """`mmb-cockpit` → `MMB Cockpit`; `campo-premiado` → `Campo Premiado`."""
+    if repo.startswith("mmb-"):
+        rest = repo[len("mmb-"):]
+        return "MMB " + " ".join(w.capitalize() for w in rest.split("-") if w)
+    return " ".join(w.capitalize() for w in repo.split("-") if w)
+
+
+def _projeto_repo_url(target: Target, default_owner: str) -> str:
+    owner = target.owner or default_owner
+    return f"git@github.com:{owner}/{target.repo}.git"
+
+
+def _sync_projetos_from_targets(
+    conn: sqlite3.Connection,
+    targets: list[Target],
+    *,
+    default_owner: str,
+) -> int:
+    """UPSERT projetos a partir do registry de targets.
+
+    Idempotente (delega em `upsert_projeto`, que usa ON CONFLICT). Não
+    deleta entries existentes — preserva histórico (ex.: `mmb-core` com
+    ciclos arquivados).
+    """
+    count = 0
+    for t in targets:
+        projeto_id = _projeto_id_from_target(t)
+        upsert_projeto(
+            conn,
+            id=projeto_id,
+            slug=projeto_id,
+            name=_projeto_name_from_repo(t.repo),
+            path=t.local_path,
+            repo_url=_projeto_repo_url(t, default_owner),
+        )
+        count += 1
+    return count
 
 
 def derive_status_with_briefing(
@@ -191,6 +241,8 @@ def reconcile(
     mmb_root: str | Path | None = None,
     # Fase 5 input — captura de modelo do planner (agents.jsonl):
     planner_models: dict[tuple[str, str], str] | None = None,
+    # Sync de projetos a partir do registry de targets:
+    targets_for_sync: list[Target] | None = None,
 ) -> ReconcileResult:
     """Roda o reconcile completo (fase 1 + fase 2).
 
@@ -284,9 +336,24 @@ def reconcile(
     for p in briefings_malformed:
         result.warn(f"briefing-malformed: {p}")
 
+    # Resolve targets a sincronizar com tabela `projetos`. None → carrega
+    # do registry (`.tooling/targets.json`) e filtra por tracked_by_logger.
+    if targets_for_sync is None:
+        try:
+            targets_for_sync = [t for t in load_targets() if t.tracked_by_logger]
+        except Exception as exc:
+            result.warn(f"targets-load-failed-for-projetos-sync: {exc}")
+            targets_for_sync = []
+
     with get_conn(db_path) as conn:
         if reset:
             _reset_derived_state(conn)
+
+        # Sincroniza tabela `projetos` com o registry — roda antes das
+        # fases que projetam ciclos (preserva semântica de "projeto existe
+        # antes do ciclo referenciar"). Idempotente, aditivo: não deleta
+        # entries obsoletas (ex.: `mmb-core`) — preserva histórico.
+        _sync_projetos_from_targets(conn, targets_for_sync, default_owner=owner)
 
         for repo in repos:
             project_short = _project_short(repo)

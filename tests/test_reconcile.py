@@ -105,6 +105,7 @@ def _run(db_path: Path, issues, prs, *, reset: bool = False, repos=("mmb-core",)
         journal_signals=[],
         agent_signals=[],
         now_epoch=0.0,
+        targets_for_sync=[],
     )
 
 
