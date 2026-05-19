@@ -54,6 +54,7 @@ from mmb_logger.reconcile.intents import (
 )
 from mmb_logger.reconcile.planner_models import load_planner_models
 from mmb_logger.reconcile.transcripts import CostResult, compute_cost_for_ciclo
+from mmb_logger.targets import load_targets
 
 OWNER_DEFAULT = "x-force-42"
 
@@ -212,6 +213,16 @@ def reconcile(
     fi = fetch_issues_fn or fetch_issues
     fp = fetch_prs_fn or fetch_prs
 
+    # Owner per-repo via registry (PR 2B). Repos não presentes no registry
+    # (ex.: fixtures históricas como mmb-core nos testes) caem no `owner`
+    # global passado como arg — backward compat preservada.
+    try:
+        _owner_by_repo: dict[str, str] = {
+            t.repo: (t.owner or owner) for t in load_targets()
+        }
+    except Exception:
+        _owner_by_repo = {}
+
     if andaime_version_fn is not None:
         version = andaime_version_fn()
     else:
@@ -280,9 +291,10 @@ def reconcile(
         for repo in repos:
             project_short = _project_short(repo)
 
+            repo_owner = _owner_by_repo.get(repo, owner)
             try:
-                issues = fi(owner, repo)
-                prs = fp(owner, repo)
+                issues = fi(repo_owner, repo)
+                prs = fp(repo_owner, repo)
             except Exception as exc:
                 result.warn(f"gh-fetch-failed: repo={repo} err={exc}")
                 continue
