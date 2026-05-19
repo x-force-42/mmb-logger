@@ -32,6 +32,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mmb_logger.targets import load_targets
+
 # ── Preços per million tokens, USD ────────────────────────────────
 #
 # Cache 5m: 1.25x input rate
@@ -114,12 +116,27 @@ def find_transcripts(
     """Devolve JSONLs da worktree esperada para o PR.
 
     head_ref_name precisa começar com `task/` (convenção atomic). Worktree
-    path: `<mmb_root>/<repo>/.worktrees/<id>-<slug>`.
+    path: `<base>/.worktrees/<id>-<slug>`, onde `<base>` é o `local_path`
+    do target no registry (resolvido contra `mmb_root` se relativo). Se o
+    repo não está no registry, fallback pra `<mmb_root>/<repo>/.worktrees`
+    — preserva backward-compat com fixtures históricas (ex: `mmb-core`).
     """
     if not head_ref_name.startswith("task/"):
         return []
     wt_name = head_ref_name[len("task/") :]
-    worktree_path = str(Path(mmb_root) / repo / ".worktrees" / wt_name)
+    try:
+        targets = load_targets()
+    except Exception:
+        targets = []
+    base: Path | None = None
+    for t in targets:
+        if t.repo == repo:
+            lp = Path(t.local_path)
+            base = lp if lp.is_absolute() else Path(mmb_root) / lp
+            break
+    if base is None:
+        base = Path(mmb_root) / repo
+    worktree_path = str(base / ".worktrees" / wt_name)
     encoded = encode_worktree_path(worktree_path)
     project_dir = Path(claude_projects_root) / encoded
     if not project_dir.is_dir():
