@@ -34,6 +34,17 @@ _REQUIRED_FIELDS = (
     "tracked_by_logger",
 )
 
+# Campos opcionais (PR 2A — preparação para target externo). Defaults
+# preservam comportamento dos targets internos atuais.
+_OPTIONAL_FIELDS = ("owner", "requires_github", "kind", "managed_by_reset")
+_KIND_VALUES = ("internal", "external", "external-fake")
+_OPTIONAL_DEFAULTS: dict[str, object] = {
+    "owner": None,  # None → caller usa MMB_GH_OWNER env
+    "requires_github": True,
+    "kind": "internal",
+    "managed_by_reset": True,
+}
+
 
 @dataclass(frozen=True)
 class Target:
@@ -44,6 +55,11 @@ class Target:
     worker_profile: str
     agent_layer: str
     tracked_by_logger: bool
+    # Opcionais (PR 2A):
+    owner: str | None = None
+    requires_github: bool = True
+    kind: str = "internal"
+    managed_by_reset: bool = True
 
 
 _cache: list[Target] | None = None
@@ -88,10 +104,11 @@ def _parse(data: object, path: Path) -> list[Target]:
         raise RegistryError(f"{path}: 'targets' ausente ou array vazio")
 
     result: list[Target] = []
+    allowed = set(_REQUIRED_FIELDS) | set(_OPTIONAL_FIELDS)
     for i, t in enumerate(raw_targets):
         if not isinstance(t, dict):
             raise RegistryError(f"{path}: target[{i}] não é objeto")
-        extra = set(t) - set(_REQUIRED_FIELDS)
+        extra = set(t) - allowed
         if extra:
             raise RegistryError(
                 f"{path}: target[{i}] tem campos extras: {sorted(extra)}"
@@ -110,6 +127,28 @@ def _parse(data: object, path: Path) -> list[Target]:
                 f"{path}: target[{i}].tracked_by_logger não é booleano "
                 f"({t['tracked_by_logger']!r})"
             )
+        # Validação dos opcionais quando presentes
+        if "owner" in t and t["owner"] is not None and not isinstance(t["owner"], str):
+            raise RegistryError(
+                f"{path}: target[{i}].owner não é string ou null ({t['owner']!r})"
+            )
+        if "requires_github" in t and not isinstance(t["requires_github"], bool):
+            raise RegistryError(
+                f"{path}: target[{i}].requires_github não é booleano "
+                f"({t['requires_github']!r})"
+            )
+        if "kind" in t and (
+            not isinstance(t["kind"], str) or t["kind"] not in _KIND_VALUES
+        ):
+            raise RegistryError(
+                f"{path}: target[{i}].kind inválido ({t.get('kind')!r}; "
+                f"use {_KIND_VALUES})"
+            )
+        if "managed_by_reset" in t and not isinstance(t["managed_by_reset"], bool):
+            raise RegistryError(
+                f"{path}: target[{i}].managed_by_reset não é booleano "
+                f"({t['managed_by_reset']!r})"
+            )
         result.append(
             Target(
                 id=t["id"],
@@ -119,6 +158,14 @@ def _parse(data: object, path: Path) -> list[Target]:
                 worker_profile=t["worker_profile"],
                 agent_layer=t["agent_layer"],
                 tracked_by_logger=t["tracked_by_logger"],
+                owner=t.get("owner", _OPTIONAL_DEFAULTS["owner"]),
+                requires_github=t.get(
+                    "requires_github", _OPTIONAL_DEFAULTS["requires_github"]
+                ),
+                kind=t.get("kind", _OPTIONAL_DEFAULTS["kind"]),
+                managed_by_reset=t.get(
+                    "managed_by_reset", _OPTIONAL_DEFAULTS["managed_by_reset"]
+                ),
             )
         )
     return result
