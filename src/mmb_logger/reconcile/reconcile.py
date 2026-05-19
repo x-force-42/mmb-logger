@@ -536,9 +536,17 @@ def _process_issue(
             ciclo_id=cycle_id,
         )
 
-    model = (
-        (planner_models or {}).get((epic_slug, project_short))
+    model = (planner_models or {}).get((epic_slug, project_short)) or (
+        cost_result.model if cost_result is not None else None
     )
+    if status == "completo" and model is None:
+        if cost_result is None:
+            reason = "sem transcript"
+        else:
+            reason = "transcript sem modelo identificado"
+        result.warn(
+            f"model-not-derivable: cycle_id={cycle_id} ({reason})"
+        )
     derived = _build_derived(
         status=status,
         pr=pr,
@@ -598,7 +606,12 @@ def _process_unmatched_briefings(
         if inserted:
             result.epicos_upserted += 1
 
-        model = (planner_models or {}).get((b.epic_slug, b.project_short))
+        # Briefing-only: sem PR, logo sem cost_result. Forma simétrica
+        # com _process_issue: fallback explícito ainda que cost_result=None.
+        cost_result: CostResult | None = None
+        model = (planner_models or {}).get((b.epic_slug, b.project_short)) or (
+            cost_result.model if cost_result is not None else None
+        )
         derived = _build_derived(
             status=status,
             pr=None,
