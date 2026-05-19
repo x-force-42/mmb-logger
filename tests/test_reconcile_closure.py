@@ -391,6 +391,7 @@ def test_intencao_continua_preenchida_apos_closure(db_path: Path, tooling: Path)
         journal_signals=[],
         agent_signals=[],
         now_epoch=datetime.fromisoformat("2026-05-16T20:00:00+00:00").timestamp(),
+        targets_for_sync=[],
     )
 
     # Nenhuma issue → nenhum épico criado pelo reconciler.

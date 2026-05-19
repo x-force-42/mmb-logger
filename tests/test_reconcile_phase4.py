@@ -178,6 +178,7 @@ def _run(
         journal_signals=[],
         agent_signals=[],
         now_epoch=0.0,
+        targets_for_sync=[],
     )
 
 

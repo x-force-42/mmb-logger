@@ -135,6 +135,7 @@ def _run(
         agent_signals=agent_signals,
         now_epoch=now_epoch,
         stale_threshold_s=stale_threshold_s,
+        targets_for_sync=[],
     )
 
 
