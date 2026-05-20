@@ -14,6 +14,7 @@ from pathlib import Path
 
 from mmb_logger.db import get_conn, list_projetos, upsert_projeto
 from mmb_logger.reconcile.gh import GhIssue, GhPr
+from mmb_logger.reconcile.inbox import Briefing
 from mmb_logger.reconcile.reconcile import reconcile
 from mmb_logger.targets import Target
 
@@ -185,3 +186,223 @@ def test_sync_uses_target_owner_when_present(db_path: Path) -> None:
     with get_conn(db_path) as conn:
         row = next(r for r in list_projetos(conn) if r["slug"] == "mmb-cockpit")
     assert row["repo_url"] == "git@github.com:some-other-org/mmb-cockpit.git"
+
+
+# ── L10: ciclos.project derivado de target.repo (sem prefixo `mmb-` indevido) ──
+
+
+_CAMPO_PREMIADO = _target(
+    "campo-premiado",
+    repo="campo-premiado",
+    kind="external",
+    local_path="/abs/campo-premiado",
+)
+
+
+def _run_reconcile_with_briefing(
+    db_path: Path,
+    *,
+    briefing: Briefing,
+    repo: str,
+    targets: list[Target],
+) -> None:
+    """Reconcile com 1 briefing órfão (sem issue) → ciclo `iniciado`."""
+
+    def fi(_owner: str, _repo: str, **_kw) -> list[GhIssue]:
+        return []
+
+    def fp(_owner: str, _repo: str, **_kw) -> list[GhPr]:
+        return []
+
+    reconcile(
+        db_path=str(db_path),
+        fetch_issues_fn=fi,
+        fetch_prs_fn=fp,
+        repos=(repo,),
+        andaime_version_fn=lambda: None,
+        tooling_root=str(db_path.parent),
+        claude_projects_root=str(db_path.parent),
+        briefings=[briefing],
+        briefings_malformed=[],
+        journal_signals=[],
+        agent_signals=[],
+        now_epoch=0.0,
+        stale_threshold_s=3600,
+        targets_for_sync=targets,
+    )
+
+
+def test_external_target_ciclo_project_sem_prefixo(db_path: Path) -> None:
+    """Reconcile pra target externo (`campo-premiado`) projeta ciclo com
+    `project='campo-premiado'`, não `mmb-campo-premiado`.
+    """
+    briefing = Briefing(
+        path="/tmp/inbox/campo-premiado/2026-05-19_master_briefing_x.md",
+        epic_slug="e1",
+        project_short="campo-premiado",
+        created="2026-05-19T10:00:00Z",
+        subject="task-x",
+        body="# brief",
+    )
+    _run_reconcile_with_briefing(
+        db_path,
+        briefing=briefing,
+        repo="campo-premiado",
+        targets=[_CAMPO_PREMIADO],
+    )
+
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT project FROM ciclos WHERE id = ?", (briefing.cycle_id,)
+        ).fetchone()
+    assert row is not None
+    assert row["project"] == "campo-premiado"
+
+
+def test_internal_target_ciclo_project_mantem_prefixo(db_path: Path) -> None:
+    """Sanity-check de não-regressão: targets internos seguem com `mmb-<id>`
+    porque o `repo` deles JÁ tem o prefixo. T1 não mexe nesse caso.
+    """
+    briefing = Briefing(
+        path="/tmp/inbox/logger/2026-05-19_master_briefing_y.md",
+        epic_slug="e2",
+        project_short="logger",
+        created="2026-05-19T10:00:00Z",
+        subject="task-y",
+        body="# brief",
+    )
+    _run_reconcile_with_briefing(
+        db_path,
+        briefing=briefing,
+        repo="mmb-logger",
+        targets=[_target("logger")],
+    )
+
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT project FROM ciclos WHERE id = ?", (briefing.cycle_id,)
+        ).fetchone()
+    assert row is not None
+    assert row["project"] == "mmb-logger"
+
+
+def _seed_ciclo_with_project(
+    conn, *, project: str, cycle_id: str = "e1__campo-premiado__t"
+) -> None:
+    """Insere epico+ciclo direto pra simular estado legado pré-fix."""
+    conn.execute(
+        "INSERT INTO epicos (id, slug, started_at, intencao, status) "
+        "VALUES ('e1', 'e1', '2026-05-19T10:00:00Z', 'e1', 'aberto')"
+    )
+    conn.execute(
+        "INSERT INTO ciclos (id, epico_id, project, planner_invoked_at, "
+        "status, instruction) VALUES (?, 'e1', ?, '2026-05-19T10:00:00Z', "
+        "'iniciado', 't')",
+        (cycle_id, project),
+    )
+
+
+def test_backfill_corrige_prefix_legado_em_target_externo(db_path: Path) -> None:
+    """Backfill idempotente: ciclo com `project='mmb-campo-premiado'` (estado
+    pré-fix) vira `project='campo-premiado'` após reconcile.
+    """
+    with get_conn(db_path) as conn:
+        _seed_ciclo_with_project(conn, project="mmb-campo-premiado")
+
+    # Reconcile com targets — repos=() pra não tentar projetar nada novo,
+    # só roda o backfill.
+    def fi(_owner: str, _repo: str, **_kw) -> list[GhIssue]:
+        return []
+
+    def fp(_owner: str, _repo: str, **_kw) -> list[GhPr]:
+        return []
+
+    reconcile(
+        db_path=str(db_path),
+        fetch_issues_fn=fi,
+        fetch_prs_fn=fp,
+        repos=(),
+        andaime_version_fn=lambda: None,
+        tooling_root=str(db_path.parent),
+        claude_projects_root=str(db_path.parent),
+        briefings=[],
+        briefings_malformed=[],
+        journal_signals=[],
+        agent_signals=[],
+        now_epoch=0.0,
+        targets_for_sync=[_CAMPO_PREMIADO],
+    )
+
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT project FROM ciclos").fetchone()
+    assert row["project"] == "campo-premiado"
+
+
+def test_backfill_e_idempotente(db_path: Path) -> None:
+    """Rodar o reconcile 2x não muda nada quando ciclos já estão corretos."""
+    with get_conn(db_path) as conn:
+        _seed_ciclo_with_project(conn, project="campo-premiado")
+
+    def fi(_owner: str, _repo: str, **_kw) -> list[GhIssue]:
+        return []
+
+    def fp(_owner: str, _repo: str, **_kw) -> list[GhPr]:
+        return []
+
+    for _ in range(2):
+        reconcile(
+            db_path=str(db_path),
+            fetch_issues_fn=fi,
+            fetch_prs_fn=fp,
+            repos=(),
+            andaime_version_fn=lambda: None,
+            tooling_root=str(db_path.parent),
+            claude_projects_root=str(db_path.parent),
+            briefings=[],
+            briefings_malformed=[],
+            journal_signals=[],
+            agent_signals=[],
+            now_epoch=0.0,
+            targets_for_sync=[_CAMPO_PREMIADO],
+        )
+
+    with get_conn(db_path) as conn:
+        rows = list(conn.execute("SELECT id, project FROM ciclos"))
+    assert len(rows) == 1
+    assert rows[0]["project"] == "campo-premiado"
+
+
+def test_backfill_nao_toca_targets_internos(db_path: Path) -> None:
+    """Backfill só age em targets cujo repo não começa com `mmb-`. Ciclo
+    legítimo de target interno (project=`mmb-cockpit`) não é tocado.
+    """
+    with get_conn(db_path) as conn:
+        _seed_ciclo_with_project(
+            conn, project="mmb-cockpit", cycle_id="e1__cockpit__t"
+        )
+
+    def fi(_owner: str, _repo: str, **_kw) -> list[GhIssue]:
+        return []
+
+    def fp(_owner: str, _repo: str, **_kw) -> list[GhPr]:
+        return []
+
+    reconcile(
+        db_path=str(db_path),
+        fetch_issues_fn=fi,
+        fetch_prs_fn=fp,
+        repos=(),
+        andaime_version_fn=lambda: None,
+        tooling_root=str(db_path.parent),
+        claude_projects_root=str(db_path.parent),
+        briefings=[],
+        briefings_malformed=[],
+        journal_signals=[],
+        agent_signals=[],
+        now_epoch=0.0,
+        targets_for_sync=[_target("cockpit"), _CAMPO_PREMIADO],
+    )
+
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT project FROM ciclos").fetchone()
+    assert row["project"] == "mmb-cockpit"

@@ -125,6 +125,26 @@ def _projeto_repo_url(target: Target, default_owner: str) -> str:
     return f"git@github.com:{owner}/{target.repo}.git"
 
 
+def _backfill_external_project_prefixes(
+    conn: sqlite3.Connection,
+    targets: list[Target],
+) -> int:
+    """Backfill idempotente: corrige `ciclos.project` herdado da convenção antiga
+    (`mmb-<id>` para todo mundo) em targets externos cujo `repo` não tem prefixo
+    `mmb-`. Roda 2x sem efeito — segundo run não encontra mais matches.
+    """
+    count = 0
+    for t in targets:
+        if t.repo.startswith("mmb-"):
+            continue
+        cursor = conn.execute(
+            "UPDATE ciclos SET project = ? WHERE project = ?",
+            (t.repo, f"mmb-{t.repo}"),
+        )
+        count += cursor.rowcount
+    return count
+
+
 def _sync_projetos_from_targets(
     conn: sqlite3.Connection,
     targets: list[Target],
@@ -355,6 +375,10 @@ def reconcile(
         # entries obsoletas (ex.: `mmb-core`) — preserva histórico.
         _sync_projetos_from_targets(conn, targets_for_sync, default_owner=owner)
 
+        # L10 (logger-project-id-normalization): corrige prefix indevido
+        # em ciclos legados de targets externos.
+        _backfill_external_project_prefixes(conn, targets_for_sync)
+
         for repo in repos:
             project_short = _project_short(repo)
 
@@ -409,6 +433,7 @@ def reconcile(
                 threshold,
                 version,
                 result,
+                repo=repo,
                 planner_models=planner_models,
             )
 
@@ -628,7 +653,7 @@ def _process_issue(
         conn,
         cycle_id=cycle_id,
         epico_id=epic_slug,
-        project_short=project_short,
+        repo=issue.repo,
         planner_invoked_at=planner_invoked_at,
         instruction=instruction,
         derived=derived,
@@ -646,6 +671,7 @@ def _process_unmatched_briefings(
     andaime_version: str | None,
     result: ReconcileResult,
     *,
+    repo: str,
     planner_models: dict[tuple[str, str], str] | None = None,
 ) -> None:
     """Briefings sem issue casada — criam ciclo iniciado ou abortado pré-GH.
@@ -692,7 +718,7 @@ def _process_unmatched_briefings(
             conn,
             cycle_id=b.cycle_id,
             epico_id=b.epic_slug,
-            project_short=b.project_short,
+            repo=repo,
             planner_invoked_at=b.created,
             instruction=b.subject,
             derived=derived,
@@ -832,7 +858,7 @@ def _upsert_ciclo_selective(
     *,
     cycle_id: str,
     epico_id: str,
-    project_short: str,
+    repo: str,
     planner_invoked_at: str,
     instruction: str,
     derived: dict[str, object],
@@ -844,7 +870,12 @@ def _upsert_ciclo_selective(
     UPDATE: SÓ derivadas. Nunca toca campos humanos nem `cost_*`, `tokens_*`
     (fase 4).
     """
-    project_full = f"mmb-{project_short}"
+    # ciclos.project = target.repo (convenção PR #34 + L10): internos
+    # mantêm prefixo `mmb-` por conta do nome do repo; externos como
+    # `campo-premiado` ficam sem prefixo. Antes derivávamos de
+    # `project_short` com `f"mmb-{...}"`, o que rotulava ciclos externos
+    # como `mmb-campo-premiado` e desalinhava da tabela `projetos`.
+    project_full = repo
 
     existing = conn.execute("SELECT 1 FROM ciclos WHERE id = ?", (cycle_id,)).fetchone()
 
