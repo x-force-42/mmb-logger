@@ -287,7 +287,7 @@ def backfill_agent_sessions_cmd(
             typer.echo(
                 f"  {row['session_id']} {row['role']:10} "
                 f"{row['project'] or '-':10} {row.get('slug') or '-':40} "
-                f"{row['tool_call_count']} calls"
+                f"{row['tool_call_count_total']} calls"
             )
 
 

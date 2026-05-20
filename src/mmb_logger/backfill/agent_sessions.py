@@ -880,7 +880,7 @@ def summarize(records: list[SessionRecord]) -> BackfillResult:
         for r in sorted(records, key=lambda x: x.duration_wall_ms or 0, reverse=True)[:10]
     ]
     result.top_by_tool_calls = [
-        _topinfo(r, "tool_call_count", sum(r.tool_calls_by_name.values()))
+        _topinfo(r, "tool_call_count_total", sum(r.tool_calls_by_name.values()))
         for r in sorted(
             records, key=lambda x: sum(x.tool_calls_by_name.values()), reverse=True
         )[:10]
