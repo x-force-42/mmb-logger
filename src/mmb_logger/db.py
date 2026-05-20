@@ -212,7 +212,40 @@ def _row_to_ciclo(row: sqlite3.Row) -> dict[str, Any]:
         "abort_reason": row["abort_reason"],
         "andaime_version": row["andaime_version"],
         "model": row["model"],
+        "duration_seconds": _compute_duration_seconds(
+            planner_invoked_at=row["planner_invoked_at"],
+            closed_complete_at=row["closed_complete_at"],
+            closed_partial_at=row["closed_partial_at"],
+            abort_at=row["abort_at"],
+        ),
     }
+
+
+def _compute_duration_seconds(
+    *,
+    planner_invoked_at: str | None,
+    closed_complete_at: str | None,
+    closed_partial_at: str | None,
+    abort_at: str | None,
+) -> int | None:
+    """Duração derivada em segundos. None se ciclo ainda em andamento.
+
+    Fim = primeiro existente entre (closed_complete_at, closed_partial_at,
+    abort_at). Timestamps são UTC (sufixo Z) no DB; `fromisoformat` em
+    Python 3.11+ aceita o `Z`.
+    """
+    end_ts = closed_complete_at or closed_partial_at or abort_at
+    if not end_ts or not planner_invoked_at:
+        return None
+    try:
+        start = datetime.fromisoformat(planner_invoked_at.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(end_ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    delta = (end - start).total_seconds()
+    if delta < 0:
+        return None
+    return int(delta)
 
 
 def _row_to_ciclo_detail(row: sqlite3.Row) -> dict[str, Any]:
@@ -313,6 +346,7 @@ def list_epicos(
     conn: sqlite3.Connection,
     *,
     status: str | None = None,
+    project: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     andaime_versions: list[str] | None = None,
@@ -322,25 +356,37 @@ def list_epicos(
     where: list[str] = []
     params: list[Any] = []
     if status:
-        where.append("status = ?")
+        where.append("epicos.status = ?")
         params.append(status)
     if date_from:
-        where.append("started_at >= ?")
+        where.append("epicos.started_at >= ?")
         params.append(date_from)
     if date_to:
-        where.append("started_at <= ?")
+        where.append("epicos.started_at <= ?")
         params.append(date_to)
     if andaime_versions:
         placeholders = ",".join("?" for _ in andaime_versions)
-        where.append(f"andaime_version IN ({placeholders})")
+        where.append(f"epicos.andaime_version IN ({placeholders})")
         params.extend(andaime_versions)
+
+    # ?project=<slug>: épicos que têm pelo menos 1 ciclo no projeto. EXISTS
+    # evita produto cartesiano + DISTINCT, mais barato em SQLite.
+    if project:
+        where.append(
+            "EXISTS (SELECT 1 FROM ciclos WHERE ciclos.epico_id = epicos.id "
+            "AND ciclos.project = ?)"
+        )
+        params.append(project)
+
     clause = ("WHERE " + " AND ".join(where)) if where else ""
-    total = conn.execute(f"SELECT COUNT(*) AS n FROM epicos {clause}", params).fetchone()["n"]
+    total = conn.execute(
+        f"SELECT COUNT(*) AS n FROM epicos {clause}", params
+    ).fetchone()["n"]
     rows = conn.execute(
         f"""
         SELECT * FROM epicos
         {clause}
-        ORDER BY started_at DESC
+        ORDER BY epicos.started_at DESC
         LIMIT ? OFFSET ?
         """,
         [*params, limit, offset],

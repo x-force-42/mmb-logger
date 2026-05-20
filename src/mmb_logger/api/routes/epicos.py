@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api/epicos", tags=["epicos"])
 def list_epicos_route(
     request: Request,
     status: str | None = Query(default=None, pattern="^(aberto|fechado)$"),
+    project: str | None = Query(default=None),
     date_from: str | None = Query(default=None, alias="from"),
     date_to: str | None = Query(default=None, alias="to"),
     andaime_version: Annotated[list[str] | None, Query()] = None,
@@ -27,6 +28,7 @@ def list_epicos_route(
         items, total = list_epicos(
             conn,
             status=status,
+            project=project,
             date_from=date_from,
             date_to=date_to,
             andaime_versions=andaime_version,

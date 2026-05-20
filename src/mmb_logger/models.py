@@ -53,6 +53,7 @@ class Ciclo(BaseModel):
     abort_reason: str | None = None
     andaime_version: str | None = None
     model: str | None = None
+    duration_seconds: int | None = None
 
 
 class CicloDetail(Ciclo):
