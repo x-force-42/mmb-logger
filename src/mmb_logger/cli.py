@@ -184,3 +184,110 @@ def backfill_model_cmd(
             )
 
 
+@app.command("backfill-agent-sessions")
+def backfill_agent_sessions_cmd(
+    db: str | None = typer.Option(None, "--db", help="Caminho do SQLite."),
+    mmb_root: str | None = typer.Option(
+        None, "--mmb-root", help="Raiz do MMB (default: walk-up procurando .tooling/)."
+    ),
+    claude_projects: str | None = typer.Option(
+        None,
+        "--claude-projects",
+        help="Diretório de transcripts Claude (default: ~/.claude/projects).",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Não escreve no DB; só agrega e reporta."
+    ),
+    write: bool = typer.Option(
+        False, "--write", help="Persiste no DB. Mutuamente exclusivo com --dry-run."
+    ),
+    no_gh: bool = typer.Option(
+        False,
+        "--no-gh",
+        help="Pula chamadas gh (offline). Atomics ficam LOW sem cross-GH.",
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit", help="Processa só N sessões (debug)."
+    ),
+    output_jsonl: str | None = typer.Option(
+        None,
+        "--output-jsonl",
+        help="Exporta dataset pra JSONL (independente de --dry-run/--write).",
+    ),
+) -> None:
+    """Backfill retroativo de sessões Claude Code → `agent_sessions`.
+
+    Lê transcripts em ~/.claude/projects, classifica role, normaliza task_id,
+    cruza com GitHub pra promover linkagem, e popula a tabela `agent_sessions`
+    via UPSERT idempotente por `session_id`.
+
+    Custo é estimativa (cost_usd_estimated + cost_pricing_version +
+    cost_confidence); NÃO substitui ciclos.cost_usd. ORPHAN é estado válido
+    ("sem ciclo MMB único confiável"), persistido com ciclo_id=NULL.
+
+    Fail-safe: sem --dry-run nem --write, o comando recusa rodar.
+    """
+    from mmb_logger.backfill.agent_sessions import (
+        backfill_agent_sessions as _backfill,
+    )
+
+    try:
+        result = _backfill(
+            db_path=db,
+            mmb_root=mmb_root,
+            claude_projects=claude_projects,
+            write=write,
+            dry_run=dry_run,
+            no_gh=no_gh,
+            limit=limit,
+            output_jsonl=output_jsonl,
+        )
+    except ValueError as exc:
+        typer.secho(f"Erro: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+    except FileNotFoundError as exc:
+        typer.secho(f"Erro: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    prefix = "[dry-run] " if result.dry_run else ""
+    typer.echo(f"{prefix}sessões processadas: {result.sessions_processed}")
+    if write:
+        typer.echo(f"inseridas: {result.inserted}")
+        typer.echo(f"atualizadas: {result.updated}")
+    typer.echo(f"custo estimado total: US$ {result.cost_total_usd:.2f}")
+    typer.echo("por role:")
+    for role, n in sorted(result.by_role.items(), key=lambda kv: -kv[1]):
+        cost = result.cost_by_role.get(role, 0.0)
+        typer.echo(f"  {role:15} n={n:<5} cost_est=US$ {cost:.2f}")
+    typer.echo("por link_confidence:")
+    for conf in ("HIGH", "MEDIUM", "LOW", "ORPHAN"):
+        n = result.by_confidence.get(conf, 0)
+        cost = result.cost_by_confidence.get(conf, 0.0)
+        typer.echo(f"  {conf:8} n={n:<5} cost_est=US$ {cost:.2f}")
+    if result.top_by_cost:
+        typer.echo("top 10 por custo:")
+        for row in result.top_by_cost:
+            typer.echo(
+                f"  {row['session_id']} {row['role']:10} "
+                f"{row['project'] or '-':10} {row.get('slug') or '-':40} "
+                f"US$ {row['cost_usd_estimated']}"
+            )
+    if result.top_by_duration:
+        typer.echo("top 10 por duração wall (min):")
+        for row in result.top_by_duration:
+            mins = row["duration_wall_ms"] / 60000
+            typer.echo(
+                f"  {row['session_id']} {row['role']:10} "
+                f"{row['project'] or '-':10} {row.get('slug') or '-':40} "
+                f"{mins:.1f} min"
+            )
+    if result.top_by_tool_calls:
+        typer.echo("top 10 por tool calls:")
+        for row in result.top_by_tool_calls:
+            typer.echo(
+                f"  {row['session_id']} {row['role']:10} "
+                f"{row['project'] or '-':10} {row.get('slug') or '-':40} "
+                f"{row['tool_call_count_total']} calls"
+            )
+
+
