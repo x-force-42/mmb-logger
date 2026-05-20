@@ -457,20 +457,22 @@ def reconcile(
 
 
 def _enrich_epicos_intencao(conn: sqlite3.Connection, tooling_root) -> None:
-    """Preenche `epicos.intencao` para épicos cujo valor ainda é o slug placeholder.
+    """Re-deriva `epicos.intencao` a partir do master-briefing.md a cada reconcile.
 
-    Não sobrescreve intenções já enriquecidas — leitura ESTRITAMENTE quando
-    `intencao = id` (placeholder por construção do reconciler).
+    Idempotente: roda em todos os épicos, mas só executa UPDATE quando o valor
+    mudaria. Backfill automático cobre épicos cujo `intencao` foi gravado antes
+    da cascata humana (summary → seção literal → h1) entrar em vigor.
+
+    Se `load_intent_text` retornar None (sem briefing no FS), preserva o valor
+    atual (não regride pro slug).
     """
-    rows = conn.execute(
-        "SELECT id, slug FROM epicos WHERE intencao = id"
-    ).fetchall()
+    rows = conn.execute("SELECT id, slug, intencao FROM epicos").fetchall()
     for row in rows:
         intent = load_intent_text(tooling_root, row["slug"])
-        if intent and intent != row["id"]:
+        if intent and intent != row["intencao"]:
             conn.execute(
-                "UPDATE epicos SET intencao = ? WHERE id = ? AND intencao = ?",
-                (intent, row["id"], row["id"]),
+                "UPDATE epicos SET intencao = ? WHERE id = ?",
+                (intent, row["id"]),
             )
 
 
@@ -607,9 +609,10 @@ def _process_issue(
     planner_invoked_at = (
         matched_briefing.created if matched_briefing else (anchor_ts or issue.created_at)
     )
-    instruction = (
-        matched_briefing.subject if matched_briefing else (issue.title or "(sem título)")
-    )
+    if matched_briefing is not None:
+        instruction = matched_briefing.summary or matched_briefing.subject
+    else:
+        instruction = issue.title or "(sem título)"
 
     # Fase 4: cost + tokens via transcript se houver PR. Resultado None →
     # campos voltam pra NULL (caso transcript desapareça entre runs).
@@ -720,7 +723,7 @@ def _process_unmatched_briefings(
             epico_id=b.epic_slug,
             repo=repo,
             planner_invoked_at=b.created,
-            instruction=b.subject,
+            instruction=(b.summary or b.subject),
             derived=derived,
         )
         result.ciclos_upserted += 1
@@ -867,8 +870,9 @@ def _upsert_ciclo_selective(
 
     INSERT: pivot + derivadas; colunas humanas (assertiveness_score,
     review_note) ficam NULL.
-    UPDATE: SÓ derivadas. Nunca toca campos humanos nem `cost_*`, `tokens_*`
-    (fase 4).
+    UPDATE: derivadas + `instruction` (também derivada via summary→subject),
+    pra cobrir backfill quando o briefing ganha summary após ciclo gravado.
+    Nunca toca campos humanos.
     """
     # ciclos.project = target.repo (convenção PR #34 + L10): internos
     # mantêm prefixo `mmb-` por conta do nome do repo; externos como
@@ -897,8 +901,9 @@ def _upsert_ciclo_selective(
             vals,
         )
     else:
-        sets = [f"{k} = ?" for k in DERIVED_COLS]
+        sets = [f"{k} = ?" for k in DERIVED_COLS] + ["instruction = ?"]
         vals = [derived[k] for k in DERIVED_COLS]
+        vals.append(instruction)
         vals.append(cycle_id)
         conn.execute(
             f"UPDATE ciclos SET {', '.join(sets)} WHERE id = ?",

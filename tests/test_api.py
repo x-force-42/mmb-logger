@@ -307,6 +307,110 @@ def test_andaime_versions_route_empty_db(client: TestClient):
     assert r.json() == {"items": []}
 
 
+def _seed_ciclos_para_duration(db_path):
+    """Seed 3 ciclos: completo (com closed_complete_at), abortado, em andamento."""
+    with get_conn(db_path) as conn:
+        upsert_epico(
+            conn, id="ep_dur", slug="ep_dur",
+            started_at="2026-05-10T10:00:00Z", intencao="x",
+        )
+        # completo: 1h após planner_invoked_at
+        upsert_ciclo(
+            conn, id="c_completo", epico_id="ep_dur",
+            project="mmb-cockpit",
+            planner_invoked_at="2026-05-10T10:00:00Z",
+            status="completo", instruction="i",
+        )
+        conn.execute(
+            "UPDATE ciclos SET closed_complete_at = ?, closed_partial_at = ? "
+            "WHERE id = 'c_completo'",
+            ("2026-05-10T11:00:00Z", "2026-05-10T10:30:00Z"),
+        )
+        # abortado: 30min após planner_invoked_at
+        upsert_ciclo(
+            conn, id="c_abortado", epico_id="ep_dur",
+            project="mmb-cockpit",
+            planner_invoked_at="2026-05-10T12:00:00Z",
+            status="abortado", instruction="i",
+        )
+        conn.execute(
+            "UPDATE ciclos SET abort_at = ? WHERE id = 'c_abortado'",
+            ("2026-05-10T12:30:00Z",),
+        )
+        # em andamento: sem closed_* nem abort_at
+        upsert_ciclo(
+            conn, id="c_andamento", epico_id="ep_dur",
+            project="mmb-cockpit",
+            planner_invoked_at="2026-05-10T13:00:00Z",
+            status="iniciado", instruction="i",
+        )
+
+
+def test_ciclo_duration_seconds_completo(client: TestClient, db_path):
+    _seed_ciclos_para_duration(db_path)
+    r = client.get("/api/ciclos?epico=ep_dur")
+    assert r.status_code == 200
+    items = {c["id"]: c for c in r.json()["items"]}
+    assert items["c_completo"]["duration_seconds"] == 3600
+
+
+def test_ciclo_duration_seconds_abortado(client: TestClient, db_path):
+    _seed_ciclos_para_duration(db_path)
+    r = client.get("/api/ciclos/c_abortado")
+    assert r.status_code == 200
+    assert r.json()["duration_seconds"] == 1800
+
+
+def test_ciclo_duration_seconds_em_andamento_eh_null(client: TestClient, db_path):
+    _seed_ciclos_para_duration(db_path)
+    r = client.get("/api/ciclos/c_andamento")
+    assert r.status_code == 200
+    assert r.json()["duration_seconds"] is None
+
+
+def _seed_epicos_multi_projeto(db_path):
+    """Seed 2 épicos: ep_a com ciclo em mmb-cockpit, ep_b com ciclo em mmb-logger."""
+    with get_conn(db_path) as conn:
+        for slug, project in (("ep_a", "mmb-cockpit"), ("ep_b", "mmb-logger")):
+            upsert_epico(
+                conn, id=slug, slug=slug,
+                started_at="2026-05-10T10:00:00Z", intencao="x",
+            )
+            upsert_ciclo(
+                conn, id=f"c_{slug}", epico_id=slug,
+                project=project,
+                planner_invoked_at="2026-05-10T10:00:00Z",
+                status="iniciado", instruction="i",
+            )
+
+
+def test_epicos_filter_project_com_match(client: TestClient, db_path):
+    _seed_epicos_multi_projeto(db_path)
+    r = client.get("/api/epicos?project=mmb-cockpit")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert {ep["id"] for ep in body["items"]} == {"ep_a"}
+
+
+def test_epicos_filter_project_sem_match(client: TestClient, db_path):
+    _seed_epicos_multi_projeto(db_path)
+    r = client.get("/api/epicos?project=mmb-aquarium")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 0
+    assert body["items"] == []
+
+
+def test_epicos_filter_project_combina_com_status(client: TestClient, db_path):
+    """project + status filtram via AND."""
+    _seed_epicos_multi_projeto(db_path)
+    r = client.get("/api/epicos?project=mmb-logger&status=aberto")
+    assert r.status_code == 200
+    body = r.json()
+    assert {ep["id"] for ep in body["items"]} == {"ep_b"}
+
+
 def test_cors(client: TestClient):
     r = client.options(
         "/api/health",

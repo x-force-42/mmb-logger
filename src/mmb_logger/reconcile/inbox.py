@@ -38,6 +38,7 @@ class Briefing:
     created: str
     subject: str
     body: str
+    summary: str | None = None
 
     @property
     def cycle_key(self) -> str:
@@ -101,6 +102,7 @@ def load_briefings(tooling_root: Path) -> BriefingsLoaded:
                 created=msg.created,
                 subject=msg.subject,
                 body=msg.body,
+                summary=msg.summary,
             )
         )
 
