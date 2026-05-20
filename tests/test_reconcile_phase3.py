@@ -432,6 +432,228 @@ def test_epicos_intencao_intent_sem_master_briefing_fica_slug(
         assert row["intencao"] == "epico-sem-intent"  # placeholder
 
 
+def _write_master_briefing_raw(
+    tooling: Path, *, epic_slug: str, content: str, date_prefix: str = "2026-05-16"
+) -> Path:
+    dir_ = tooling / "intents" / f"{date_prefix}-{epic_slug}"
+    dir_.mkdir(parents=True, exist_ok=True)
+    path = dir_ / "master-briefing.md"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def test_epicos_intencao_prefere_summary_do_frontmatter(
+    db_path: Path, tooling: Path
+):
+    """Frontmatter `summary: ...` ganha do h1 — frase humana sobrescreve título técnico."""
+    _write_master_briefing_raw(
+        tooling,
+        epic_slug="epico-summary",
+        content=(
+            "---\n"
+            "summary: Frase humana resumindo a intenção\n"
+            "---\n\n"
+            "# Master Briefing — Título técnico que ninguém lê\n\n"
+            "## Detalhes\n\nblá\n"
+        ),
+    )
+    _write_inbox_msg(
+        tooling, dest="core", from_="master", type_="briefing",
+        subject="briefing-tecnico", thread="epico-summary",
+        created="2026-05-16T10:00:00Z",
+    )
+    _run(
+        db_path, tooling,
+        now_epoch=datetime.fromisoformat("2026-05-16T10:30:00+00:00").timestamp(),
+    )
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT intencao FROM epicos WHERE id='epico-summary'"
+        ).fetchone()
+        assert row["intencao"] == "Frase humana resumindo a intenção"
+
+
+def test_epicos_intencao_secao_literal_do_rick(db_path: Path, tooling: Path):
+    """Sem summary, extrai primeiro parágrafo de '## Intenção (literal do Rick)'."""
+    _write_master_briefing_raw(
+        tooling,
+        epic_slug="epico-literal",
+        content=(
+            "# Master Briefing — Logger: filtro epicos\n\n"
+            "## Status\n\n- Criado: 2026-05-16\n\n"
+            "## Intenção (literal do Rick)\n\n"
+            "> a intenção que aparece no épico parece não dizer\n"
+            "> nada com nada pra mim como usuário.\n\n"
+            "## Tradução\n\nblá blá\n"
+        ),
+    )
+    _write_inbox_msg(
+        tooling, dest="core", from_="master", type_="briefing",
+        subject="x", thread="epico-literal",
+        created="2026-05-16T10:00:00Z",
+    )
+    _run(
+        db_path, tooling,
+        now_epoch=datetime.fromisoformat("2026-05-16T10:30:00+00:00").timestamp(),
+    )
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT intencao FROM epicos WHERE id='epico-literal'"
+        ).fetchone()
+        assert row["intencao"] == (
+            "a intenção que aparece no épico parece não dizer "
+            "nada com nada pra mim como usuário."
+        )
+
+
+def test_epicos_intencao_backfill_overwrites_old_h1(db_path: Path, tooling: Path):
+    """Backfill: épico já gravado com h1 antigo é re-derivado quando summary aparece."""
+    # Run 1: só h1, sem summary.
+    _write_master_briefing_raw(
+        tooling,
+        epic_slug="epico-backfill",
+        content="# H1 técnico antigo\n\nbody\n",
+    )
+    _write_inbox_msg(
+        tooling, dest="core", from_="master", type_="briefing",
+        subject="x", thread="epico-backfill",
+        created="2026-05-16T10:00:00Z",
+    )
+    _run(
+        db_path, tooling,
+        now_epoch=datetime.fromisoformat("2026-05-16T10:30:00+00:00").timestamp(),
+    )
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT intencao FROM epicos WHERE id='epico-backfill'"
+        ).fetchone()
+        assert row["intencao"] == "H1 técnico antigo"
+
+    # Run 2: master atualiza briefing com summary humano.
+    _write_master_briefing_raw(
+        tooling,
+        epic_slug="epico-backfill",
+        content=(
+            "---\nsummary: Intenção humana adicionada depois\n---\n\n"
+            "# H1 técnico antigo\n\nbody\n"
+        ),
+    )
+    _run(
+        db_path, tooling,
+        now_epoch=datetime.fromisoformat("2026-05-16T11:00:00+00:00").timestamp(),
+    )
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT intencao FROM epicos WHERE id='epico-backfill'"
+        ).fetchone()
+        assert row["intencao"] == "Intenção humana adicionada depois"
+
+    # Run 3 idempotente: rodar de novo não muda nada.
+    _run(
+        db_path, tooling,
+        now_epoch=datetime.fromisoformat("2026-05-16T11:30:00+00:00").timestamp(),
+    )
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT intencao FROM epicos WHERE id='epico-backfill'"
+        ).fetchone()
+        assert row["intencao"] == "Intenção humana adicionada depois"
+
+
+def test_ciclos_instruction_prefere_summary_do_briefing(
+    db_path: Path, tooling: Path
+):
+    """instruction prefere `summary` do frontmatter do briefing per-orq sobre subject."""
+    # Briefing com summary no frontmatter.
+    name = "2026-05-16T10-00-00Z_master_briefing_subject-tecnico.md"
+    path = tooling / "inbox" / "core" / name
+    path.write_text(
+        "\n".join([
+            "---",
+            "from: master",
+            "to: core",
+            "type: briefing",
+            "subject: subject-tecnico",
+            "thread: epico-instr",
+            "created: 2026-05-16T10:00:00Z",
+            "summary: Instrução humana legível",
+            "---",
+            "",
+            "body",
+        ]),
+        encoding="utf-8",
+    )
+    _run(
+        db_path, tooling,
+        now_epoch=datetime.fromisoformat("2026-05-16T10:30:00+00:00").timestamp(),
+    )
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT instruction FROM ciclos WHERE epico_id='epico-instr'"
+        ).fetchone()
+        assert row["instruction"] == "Instrução humana legível"
+
+
+def test_ciclos_instruction_backfill_overwrites_old_subject(
+    db_path: Path, tooling: Path
+):
+    """Backfill de instruction: ciclo existente vira summary quando briefing ganha summary."""
+    name = "2026-05-16T10-00-00Z_master_briefing_subject-tecnico.md"
+    path = tooling / "inbox" / "core" / name
+    # Run 1: sem summary.
+    path.write_text(
+        "\n".join([
+            "---",
+            "from: master",
+            "to: core",
+            "type: briefing",
+            "subject: subject-tecnico",
+            "thread: epico-backinstr",
+            "created: 2026-05-16T10:00:00Z",
+            "---",
+            "",
+            "body",
+        ]),
+        encoding="utf-8",
+    )
+    _run(
+        db_path, tooling,
+        now_epoch=datetime.fromisoformat("2026-05-16T10:30:00+00:00").timestamp(),
+    )
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT instruction FROM ciclos WHERE epico_id='epico-backinstr'"
+        ).fetchone()
+        assert row["instruction"] == "subject-tecnico"
+
+    # Run 2: master adiciona summary.
+    path.write_text(
+        "\n".join([
+            "---",
+            "from: master",
+            "to: core",
+            "type: briefing",
+            "subject: subject-tecnico",
+            "thread: epico-backinstr",
+            "created: 2026-05-16T10:00:00Z",
+            "summary: Frase humana descobrindo o ciclo",
+            "---",
+            "",
+            "body",
+        ]),
+        encoding="utf-8",
+    )
+    _run(
+        db_path, tooling,
+        now_epoch=datetime.fromisoformat("2026-05-16T11:00:00+00:00").timestamp(),
+    )
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT instruction FROM ciclos WHERE epico_id='epico-backinstr'"
+        ).fetchone()
+        assert row["instruction"] == "Frase humana descobrindo o ciclo"
+
+
 # ── Idempotência ──────────────────────────────────────────────────
 
 

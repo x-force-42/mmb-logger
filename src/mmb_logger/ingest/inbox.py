@@ -23,6 +23,7 @@ class InboxMessage:
     thread: str | None
     created: str
     body: str
+    summary: str | None = None
 
     @property
     def project_slug(self) -> str | None:
@@ -55,6 +56,7 @@ def parse_inbox_file(path: str | Path) -> InboxMessage | None:
         thread=fm.get("thread") or None,
         created=fm["created"],
         body=parsed.body,
+        summary=(fm.get("summary") or None),
     )
 
 

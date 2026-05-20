@@ -15,9 +15,16 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+from mmb_logger.ingest.frontmatter import parse as parse_fm
+
 # Tamanho máximo de intenção. Cockpit mostra a primeira linha; passar muito
 # disso seria poluição. Truncamento conservador.
 _MAX_INTENT_CHARS = 500
+
+# Heading canônico que abre a citação literal do Rick no master-briefing.md.
+_INTENT_SECTION_RE = re.compile(
+    r"^##\s+Intenção\s*\(literal do Rick\)\s*$", re.IGNORECASE
+)
 
 # Linha canônica de fechamento: 'Status: ✅' com variações de formatação markdown.
 _CLOSED_RE = re.compile(r"^\s*[-*]?\s*Status:\s*.*✅", re.MULTILINE)
@@ -120,11 +127,18 @@ def parse_closed_marker(text: str) -> bool:
 
 
 def load_intent_text(tooling_root: Path, epic_slug: str) -> str | None:
-    """Procura master-briefing.md pra `<slug>` e retorna a intenção.
+    """Procura master-briefing.md pra `<slug>` e retorna a intenção humana.
 
-    Estratégia de extração (primeiro hit ganha):
-    1. Primeira linha que começa com `# ` (h1 markdown) — usa como intenção.
-    2. Senão, primeira linha não-vazia, ignorando frontmatter (entre `---`).
+    Estratégia de extração em cascata (primeiro hit ganha):
+      1. Frontmatter `summary: <frase>` — frase humana curta declarada pelo
+         Master. Convenção introduzida quando o método ganhou o débito de
+         intencao/instruction humanas (briefing logger-human-intent-instruction).
+      2. Seção `## Intenção (literal do Rick)` — primeiro parágrafo não-vazio
+         após o heading. Linhas em blockquote (`> ...`) têm o prefixo `>`
+         removido e são concatenadas; parágrafo termina na primeira linha vazia
+         (ou no próximo heading `##`).
+      3. H1 markdown (`# título`) — fallback histórico.
+      4. Primeira linha não-vazia ignorando frontmatter.
 
     Retorna None se não encontrar dir, não encontrar master-briefing.md, ou
     arquivo vazio.
@@ -138,30 +152,59 @@ def load_intent_text(tooling_root: Path, epic_slug: str) -> str | None:
     except OSError:
         return None
 
-    in_frontmatter = False
-    saw_open_fence = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        # Frontmatter handling — pula bloco entre os primeiros dois "---"
-        if stripped == "---":
-            if not saw_open_fence:
-                saw_open_fence = True
-                in_frontmatter = True
-                continue
-            if in_frontmatter:
-                in_frontmatter = False
-                continue
-        if in_frontmatter:
+    parsed = parse_fm(text)
+    summary = parsed.frontmatter.get("summary")
+    if summary:
+        return _truncate(summary.strip())
+
+    intent_section = _extract_intent_section(parsed.body)
+    if intent_section:
+        return _truncate(intent_section)
+
+    return _extract_h1_or_first_line(parsed.body)
+
+
+def _extract_intent_section(body: str) -> str | None:
+    """Extrai primeiro parágrafo após `## Intenção (literal do Rick)`.
+
+    Trata blockquote (`>` prefix) removendo o marcador — o texto humano
+    importa, não a marcação. Concatena linhas contínuas em um parágrafo
+    com espaço; termina na primeira linha vazia ou no próximo heading.
+    """
+    lines = body.splitlines()
+    in_section = False
+    paragraph: list[str] = []
+    for line in lines:
+        if not in_section:
+            if _INTENT_SECTION_RE.match(line.strip()):
+                in_section = True
             continue
+        stripped = line.strip()
+        if stripped.startswith("##"):
+            break
+        if not stripped:
+            if paragraph:
+                break  # parágrafo terminou
+            continue
+        if stripped.startswith(">"):
+            stripped = stripped.lstrip(">").lstrip()
         if not stripped:
             continue
-        # H1 markdown
-        if stripped.startswith("# "):
-            intent = stripped[2:].strip()
-            return _truncate(intent)
-        # Primeira linha não-vazia, não-h1
-        return _truncate(stripped)
+        paragraph.append(stripped)
+    if not paragraph:
+        return None
+    return " ".join(paragraph)
 
+
+def _extract_h1_or_first_line(body: str) -> str | None:
+    """Comportamento histórico: h1 ou primeira linha não-vazia do body."""
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("# "):
+            return _truncate(stripped[2:].strip())
+        return _truncate(stripped)
     return None
 
 
