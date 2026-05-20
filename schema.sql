@@ -96,3 +96,94 @@ CREATE TABLE IF NOT EXISTS jsonl_cursor (
   last_offset INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- agent_sessions (v2026-05-20+): camada retrospectiva de sessões Claude Code.
+--
+-- Granularidade: 1 linha por arquivo .jsonl em ~/.claude/projects/<encoded>/.
+-- Tabela é populada pelo comando opt-in `mmb-logger backfill-agent-sessions`
+-- (não pelo reconcile padrão). Independente de ciclos: ORPHAN é estado
+-- válido ("sem ciclo MMB único confiável"), não erro.
+--
+-- Custo é estimativa operacional (cost_usd_estimated), NÃO substitui
+-- ciclos.cost_usd. Pricing version carimbado por linha. duration_api_ms
+-- fica NULL retroativo (proxy de transcript é fraca; só preenche quando
+-- vier de fonte canônica como `claude -p --output-format json`).
+-- ─────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  -- Identidade
+  session_id              TEXT PRIMARY KEY,
+  transcript_path         TEXT NOT NULL,
+  project_encoded_dir     TEXT,
+  cwd                     TEXT,
+  git_branch              TEXT,
+
+  -- Classificação
+  role                    TEXT NOT NULL CHECK (role IN
+    ('master','manual','atomic','orchestrator','unknown')),
+  link_confidence         TEXT NOT NULL CHECK (link_confidence IN
+    ('HIGH','MEDIUM','LOW','ORPHAN')),
+  link_reason             TEXT,
+  evidence_json           TEXT,
+
+  -- Linkagem MMB (ciclo_id/epico_id nullable; ORPHAN ingere com NULL)
+  ciclo_id                TEXT REFERENCES ciclos(id) ON DELETE SET NULL,
+  epico_id                TEXT REFERENCES epicos(id) ON DELETE SET NULL,
+  project                 TEXT,
+  task_id_raw             TEXT,
+  task_id_normalized      TEXT,
+  slug                    TEXT,
+  candidate_issue_number  INTEGER,
+  candidate_pr_number     INTEGER,
+  candidate_pr_url        TEXT,
+
+  -- Tempo (3 visões)
+  started_at              TEXT,
+  ended_at                TEXT,
+  duration_wall_ms        INTEGER,
+  active_interaction_ms   INTEGER,
+  duration_api_ms         INTEGER,   -- NULL em backfill retroativo
+
+  -- Modelo/custo/tokens
+  model_resolved          TEXT,
+  models_json             TEXT,
+  permission_mode         TEXT,
+  claude_version          TEXT,
+  has_synthetic_turns     INTEGER NOT NULL DEFAULT 0
+                            CHECK (has_synthetic_turns IN (0,1)),
+  input_tokens            INTEGER,
+  output_tokens           INTEGER,
+  cache_creation_tokens   INTEGER,
+  cache_read_tokens       INTEGER,
+  cost_usd_estimated      REAL,
+  cost_pricing_version    TEXT,
+  cost_confidence         TEXT CHECK (cost_confidence IN
+    ('ok_unvalidated','mixed_models','has_synthetic','unknown_model','no_model')
+    OR cost_confidence IS NULL),
+
+  -- Atividade
+  num_turns               INTEGER,
+  tool_call_count_total   INTEGER,
+  tool_calls_by_name_json TEXT,
+  files_read_json         TEXT,
+  files_edited_json       TEXT,
+  bash_commands_count     INTEGER,
+
+  -- Controle
+  ingested_at             TEXT NOT NULL,
+  source                  TEXT NOT NULL DEFAULT 'claude_transcript_backfill'
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_ciclo
+  ON agent_sessions(ciclo_id);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_epico
+  ON agent_sessions(epico_id);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_role
+  ON agent_sessions(role);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_link
+  ON agent_sessions(link_confidence);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_started
+  ON agent_sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_pr
+  ON agent_sessions(candidate_pr_number);
