@@ -207,11 +207,23 @@ def link_pr_to_issue(prs: list[GhPr], result: ReconcileResult) -> dict[int, GhPr
     """Mapeia issue.number → PR. Múltiplos PRs pra mesma issue: warn + escolhe.
 
     Política: PR mergeado vence. Senão, PR criado mais recentemente.
+
+    Refs cross-repo (`Closes owner/repo#N` apontando para repo diferente
+    do PR) são ignoradas com warning — ciclo do logger é por-repo, então
+    fechar issue em outro repo não materializa ciclo aqui.
     """
     by_issue: dict[int, GhPr] = {}
     seen_multi: set[int] = set()
     for pr in prs:
-        for issue_num in parse_closes(pr.body):
+        for ref in parse_closes(pr.body):
+            if ref.repo is not None and ref.repo != pr.repo:
+                result.warn(
+                    f"cross-repo-closes-skipped: {pr.repo}#{pr.number} → "
+                    f"{ref.owner}/{ref.repo}#{ref.issue} "
+                    f"(ciclo do logger é por-repo)"
+                )
+                continue
+            issue_num = ref.issue
             existing = by_issue.get(issue_num)
             if existing is None:
                 by_issue[issue_num] = pr

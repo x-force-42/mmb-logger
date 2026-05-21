@@ -9,6 +9,7 @@ from pathlib import Path
 
 from mmb_logger.db import get_conn, patch_ciclo
 from mmb_logger.reconcile.derive import (
+    CloseRef,
     epic_from_labels,
     parse_anchor,
     parse_closes,
@@ -139,11 +140,50 @@ def test_parse_anchor_malformed_key():
 
 
 def test_parse_closes_variations():
-    assert parse_closes("Closes #42") == [42]
-    assert parse_closes("fixes #1 and closes #2") == [1, 2]
-    assert parse_closes("Resolves #99\nfix #100") == [99, 100]
+    assert parse_closes("Closes #42") == [CloseRef(None, None, 42)]
+    assert parse_closes("fixes #1 and closes #2") == [
+        CloseRef(None, None, 1),
+        CloseRef(None, None, 2),
+    ]
+    assert parse_closes("Resolves #99\nfix #100") == [
+        CloseRef(None, None, 99),
+        CloseRef(None, None, 100),
+    ]
     assert parse_closes("") == []
     assert parse_closes("issue 42 sem prefixo correto") == []
+
+
+def test_parse_closes_case_insensitive():
+    """Verbos GH são case-insensitive — parser idem."""
+    assert parse_closes("closes #1") == [CloseRef(None, None, 1)]
+    assert parse_closes("CLOSES #2") == [CloseRef(None, None, 2)]
+    assert parse_closes("Fixes #3") == [CloseRef(None, None, 3)]
+    assert parse_closes("FIXED #4") == [CloseRef(None, None, 4)]
+
+
+def test_parse_closes_cross_repo_form():
+    """Formato cross-repo `Closes owner/repo#N` é capturado com owner/repo populados."""
+    assert parse_closes("Closes x-force-42/mmb-logger#42") == [
+        CloseRef("x-force-42", "mmb-logger", 42)
+    ]
+    # External target sem prefixo mmb-:
+    assert parse_closes("Closes x-force-42/campo-premiado#7") == [
+        CloseRef("x-force-42", "campo-premiado", 7)
+    ]
+    # Repo names com pontos e hífens são válidos.
+    assert parse_closes("Fixes acme/repo.v2#10") == [
+        CloseRef("acme", "repo.v2", 10)
+    ]
+
+
+def test_parse_closes_mixed_forms():
+    """Múltiplos closes na mesma PR: mono e cross-repo lado a lado."""
+    body = "Closes #5\nAlso closes x-force-42/other#9 and fixes #6"
+    assert parse_closes(body) == [
+        CloseRef(None, None, 5),
+        CloseRef("x-force-42", "other", 9),
+        CloseRef(None, None, 6),
+    ]
 
 
 def test_epic_from_labels():

@@ -195,6 +195,25 @@ def load_targets(registry_path: Path | str | None = None) -> list[Target]:
     return targets
 
 
+def short_to_repo(project_short: str) -> str:
+    """Resolve short id (`dest`) → repo name via registry.
+
+    Para targets registrados, devolve `target.repo` — funciona pra
+    internos (`mmb-cockpit`) e externos (`campo-premiado`) igualmente.
+
+    Fallback retrocompat: shorts não encontrados (ou erro de load)
+    devolvem `mmb-{short}` — preserva ciclos antigos rotulados com o
+    prefixo embutido em `ciclos.project` antes de PR #34.
+    """
+    try:
+        for t in load_targets():
+            if t.id == project_short:
+                return t.repo
+    except Exception:
+        pass
+    return f"mmb-{project_short}"
+
+
 def repos_tracked() -> tuple[str, ...]:
     """Repos full (mmb-<id>) de targets com `tracked_by_logger=True`.
 

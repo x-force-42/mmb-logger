@@ -37,7 +37,7 @@ from typing import Any
 
 from mmb_logger.db import get_conn, init_db, now_iso
 from mmb_logger.reconcile.transcripts import PRICING, encode_worktree_path
-from mmb_logger.targets import load_targets
+from mmb_logger.targets import load_targets, short_to_repo
 
 # ── Constantes ────────────────────────────────────────────────────────────
 
@@ -540,7 +540,7 @@ def link_via_github(
         return
 
     repo_short = rec.project
-    target_full = f"mmb-{repo_short}" if repo_short else None
+    target_full = short_to_repo(repo_short) if repo_short else None
     branch = rec.git_branch
 
     if not target_full or not branch or target_full not in prs_by_target:
@@ -618,9 +618,14 @@ def link_to_db_ciclo(rec: SessionRecord, conn) -> None:
     """
     if rec.role != "atomic" or not rec.candidate_pr_number or not rec.project:
         return
+    repo = short_to_repo(rec.project)
+    legacy = f"mmb-{rec.project}"
+    candidates = (repo,) if repo == legacy else (repo, legacy)
+    placeholders = ",".join("?" * len(candidates))
     row = conn.execute(
-        "SELECT id, epico_id FROM ciclos WHERE project = ? AND pr_number = ?",
-        (f"mmb-{rec.project}", rec.candidate_pr_number),
+        f"SELECT id, epico_id FROM ciclos "
+        f"WHERE project IN ({placeholders}) AND pr_number = ?",
+        (*candidates, rec.candidate_pr_number),
     ).fetchone()
     if row:
         rec.ciclo_id = row["id"]
