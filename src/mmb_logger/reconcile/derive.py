@@ -19,10 +19,14 @@ _ANCHOR_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Closes/Fixes/Resolves #N — convenção de PR body que GH reconhece
-# pra fechar issue automaticamente. Captura todos os números.
+# Closes/Fixes/Resolves [owner/repo]#N — convenção de PR body que GH
+# reconhece pra fechar issue automaticamente. Aceita ambos:
+#   - `Closes #N` (mono-repo, conveniência GH).
+#   - `Closes owner/repo#N` (cross-repo, formato GH oficial).
+# Case-insensitive. Captura owner/repo opcionais separados do número.
 _CLOSES_RE = re.compile(
-    r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)",
+    r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+"
+    r"(?:([\w.-]+)/([\w.-]+))?#(\d+)",
     re.IGNORECASE,
 )
 
@@ -57,11 +61,37 @@ def parse_anchor(body: str) -> CycleKey | None:
     return CycleKey(epic, project, ts, briefing_file)
 
 
-def parse_closes(body: str) -> list[int]:
-    """Todos os números de issue referenciados via Closes/Fixes/Resolves."""
+class CloseRef(NamedTuple):
+    """Referência Close/Fix/Resolve em PR body.
+
+    `owner` e `repo` são `None` quando o ref usa o formato mono-repo
+    (`Closes #N`). Quando o ref usa o formato cross-repo
+    (`Closes owner/repo#N`), ambos vêm populados — o consumidor decide
+    se a referência é válida (mesmo repo do PR) ou cross-repo a ignorar.
+    """
+
+    owner: str | None
+    repo: str | None
+    issue: int
+
+
+def parse_closes(body: str) -> list[CloseRef]:
+    """Todas as refs Close/Fix/Resolve no body de um PR.
+
+    Aceita ambos formatos GH (mono-repo `#N` e cross-repo `owner/repo#N`),
+    case-insensitive. A política de mesmo-repo vs. cross-repo é
+    responsabilidade do caller — ciclo do logger é por-repo, então PRs
+    fechando issues em outros repos devem ser ignorados pela linkagem
+    (`reconcile.link_pr_to_issue` emite warning + skip).
+    """
     if not body:
         return []
-    return [int(m.group(1)) for m in _CLOSES_RE.finditer(body)]
+    refs: list[CloseRef] = []
+    for m in _CLOSES_RE.finditer(body):
+        owner = m.group(1) or None
+        repo = m.group(2) or None
+        refs.append(CloseRef(owner, repo, int(m.group(3))))
+    return refs
 
 
 def epic_from_labels(labels: tuple[str, ...]) -> str | None:

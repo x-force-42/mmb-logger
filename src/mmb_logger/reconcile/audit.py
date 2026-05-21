@@ -22,7 +22,7 @@ from mmb_logger.ingest.agents_stream import decode_agent_id
 from mmb_logger.ingest.agents_stream import parse_line as parse_agent_line
 from mmb_logger.ingest.inbox import parse_inbox_file
 from mmb_logger.ingest.journal import parse_line as parse_journal_line
-from mmb_logger.targets import historical_dest_ids
+from mmb_logger.targets import historical_dest_ids, short_to_repo
 
 # Projetos aceitos para linkagem de ciclo. Inclui 'core' como alias
 # histórico — ver mmb_logger.targets.historical_dest_ids.
@@ -207,16 +207,25 @@ def _find_ciclo_by_epic_project(
     epic_slug: str,
     project_short: str,
 ) -> str | None:
-    """Ciclo mais recente do par (épico, projeto). Heurística determinística."""
-    project_full = f"mmb-{project_short}"
+    """Ciclo mais recente do par (épico, projeto). Heurística determinística.
+
+    Resolve `project_short` → repo via registry (`short_to_repo`) — cobre
+    targets externos cujo `repo` não tem prefixo `mmb-`. Também busca o
+    legacy `mmb-{short}` quando difere, pra cobrir ciclos pré-PR#34 ainda
+    rotulados com o prefixo embutido em `ciclos.project`.
+    """
+    repo = short_to_repo(project_short)
+    legacy = f"mmb-{project_short}"
+    candidates = (repo,) if repo == legacy else (repo, legacy)
+    placeholders = ",".join("?" * len(candidates))
     row = conn.execute(
-        """
+        f"""
         SELECT id FROM ciclos
-        WHERE epico_id = ? AND project = ?
+        WHERE epico_id = ? AND project IN ({placeholders})
         ORDER BY planner_invoked_at DESC
         LIMIT 1
         """,
-        (epic_slug, project_full),
+        (epic_slug, *candidates),
     ).fetchone()
     return row["id"] if row else None
 
